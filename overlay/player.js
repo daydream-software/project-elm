@@ -8,9 +8,9 @@
  * Near the end of the current clip, we start the next one and cross the opacities,
  * then swap the two layers' roles. No black gap between clips.
  *
- * Nominal path  : <video> on the clip's direct MP4 (fully controlled transitions).
- * Fallback path : <iframe> official Twitch embed if the MP4 is missing/broken,
- *                 advanced by a timer (the iframe has no "ended" event).
+ * Each clip is a direct MP4 played in a <video> (fully controlled transitions).
+ * A per-clip safety timer forces the reel forward if a clip's MP4 is missing or
+ * corrupt (so no timeupdate/ended ever fires) — the overlay never stalls on black.
  * ========================================================================== */
 
 const DEFAULTS = {
@@ -45,21 +45,12 @@ function shuffle(arr) {
   return a;
 }
 
-/* Official Twitch embed URL (fallback). parent = current host (localhost in dev). */
-function buildEmbed(clipId, muted) {
-  const p = encodeURIComponent(location.hostname || 'localhost');
-  return `https://clips.twitch.tv/embed?clip=${encodeURIComponent(clipId)}`
-       + `&parent=${p}&autoplay=true&muted=${muted ? 'true' : 'false'}`;
-}
-
 function makeLayer(el) {
   return {
     el,
     video: el.querySelector('.clip-video'),
-    iframe: el.querySelector('.clip-iframe'),
     clip: null,
-    mode: 'video', // 'video' | 'iframe'
-    timer: null,   // advance timer (iframe path)
+    timer: null,   // safety advance timer (fires only if the video's own events don't)
   };
 }
 
@@ -94,39 +85,27 @@ class Player {
     }
   }
 
-  /* Prepare a layer for a clip WITHOUT making it visible.
-   * MP4: load the <video> (preload). iframe: deferred to startLayer. */
+  /* Prepare a layer for a clip WITHOUT making it visible (preload the <video>). */
   prepare(layer, clip) {
     layer.clip = clip;
     if (layer.timer) { clearTimeout(layer.timer); layer.timer = null; }
-    layer.iframe.hidden = true;
-    layer.iframe.src = 'about:blank';
-
-    if (clip && clip.mp4) {
-      layer.mode = 'video';
-      layer.video.hidden = false;
-      layer.video.muted = this.settings.muted;
-      layer.video.src = clip.mp4;
-      layer.video.load();
-    } else {
-      // No MP4 → iframe fallback (src set at display time).
-      layer.mode = 'iframe';
-      layer.video.hidden = true;
-      layer.video.removeAttribute('src');
-    }
+    layer.video.muted = this.settings.muted;
+    layer.video.src = clip.mp4;
+    layer.video.load();
   }
 
   /* Start playback of a (already prepared) layer. */
   async startLayer(layer, firstPlay = false) {
-    if (layer.mode === 'video') {
-      const ok = await this.tryPlay(layer.video);
-      if (!ok && firstPlay) this.showGate(() => this.tryPlay(layer.video));
-    } else {
-      // iframe: set the src now → autoplay; advance via timer.
-      layer.iframe.hidden = false;
-      layer.iframe.src = layer.clip.embed || buildEmbed(layer.clip.id, this.settings.muted);
-      this.armIframeTimer(layer);
+    const ok = await this.tryPlay(layer.video);
+    if (!ok && firstPlay) {
+      // Autoplay blocked on the first clip (a normal browser tab) → wait for a
+      // click; don't arm the safety timer or we'd skip the clip before it starts.
+      this.showGate(async () => { if (await this.tryPlay(layer.video)) this.armSafetyTimer(layer); });
+      return;
     }
+    // Playing — or a promoted clip whose MP4 is broken and won't play. Either way,
+    // arm the safety net so a clip that never fires timeupdate/ended still advances.
+    this.armSafetyTimer(layer);
   }
 
   async tryPlay(video) {
@@ -134,17 +113,20 @@ class Player {
     catch (_) { return false; }
   }
 
-  armIframeTimer(layer) {
+  /* Fallback advance: if a clip never fires timeupdate/ended (missing or corrupt
+   * MP4), force the transition shortly after its expected duration so the reel
+   * never stalls on a black frame. Healthy clips transition via onTimeUpdate first. */
+  armSafetyTimer(layer) {
     if (layer.timer) clearTimeout(layer.timer);
     const dur = Number(layer.clip.duration) || 30;
-    const ms = Math.max(500, (dur - this.transitionSec) * 1000);
+    const ms = Math.max(500, (dur + 1) * 1000);
     layer.timer = setTimeout(() => {
       if (this.front === layer && !this.transitioning) this.beginTransition();
     }, ms);
   }
 
   onTimeUpdate(layer) {
-    if (layer !== this.front || this.transitioning || layer.mode !== 'video') return;
+    if (layer !== this.front || this.transitioning) return;
     const v = layer.video;
     if (!isFinite(v.duration)) return;
     if (v.duration - v.currentTime <= this.transitionSec) this.beginTransition();
@@ -156,16 +138,9 @@ class Player {
   }
 
   onVideoError(layer) {
-    // The MP4 broke → switch this layer to the iframe for its assigned clip.
-    if (!layer.clip) return;
-    layer.mode = 'iframe';
-    layer.video.hidden = true;
-    if (layer === this.front && !this.transitioning) {
-      // Error during current playback: show the iframe right away.
-      layer.iframe.hidden = false;
-      layer.iframe.src = layer.clip.embed || buildEmbed(layer.clip.id, this.settings.muted);
-      this.armIframeTimer(layer);
-    }
+    // The MP4 broke. If it's on screen, skip past it now; a broken preload on the
+    // back layer is caught by its safety timer once it becomes the front.
+    if (layer === this.front && !this.transitioning) this.beginTransition();
   }
 
   beginTransition() {
@@ -193,7 +168,7 @@ class Player {
   }
 
   finalize(from, to, nextPos) {
-    if (from.mode === 'video') from.video.pause();
+    from.video.pause();
     if (from.timer) { clearTimeout(from.timer); from.timer = null; }
     from.el.classList.remove('front');
 
@@ -264,9 +239,9 @@ async function main() {
   }
 
   const settings = { ...DEFAULTS, ...(data.settings || {}) };
-  const clips = (data.clips || []).filter(c => c && (c.mp4 || c.id));
+  const clips = (data.clips || []).filter(c => c && c.mp4);
   if (!clips.length) {
-    showMessage('playlist.json has no playable clips (needs an "mp4" or "id" field).');
+    showMessage('playlist.json has no playable clips (needs an "mp4" field).');
     return;
   }
 
