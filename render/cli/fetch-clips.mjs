@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 /* fetch-clips — CLI over twitch.mjs. Pull your own Twitch clips, then render-reel.
- *   node fetch-clips.mjs login
- *   node fetch-clips.mjs list [--days N] [--first N]
- *   node fetch-clips.mjs pull <all|1,3,5> [--days N] [--first N]
+ *   node render/cli/fetch-clips.mjs login
+ *   node render/cli/fetch-clips.mjs list [--days N] [--first N]
+ *   node render/cli/fetch-clips.mjs pull <all|1,3,5> [--days N] [--first N]
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import * as tw from './twitch.mjs';
+import { fileURLToPath } from 'node:url';
+import * as tw from '../twitch.mjs';
 
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 const die = (m) => { console.error('✗ ' + m); process.exit(1); };
 const fmtDur = (s) => { s = Math.round(s || 0); const m = Math.floor(s / 60); return m ? `${m}:${String(s % 60).padStart(2, '0')}` : `${s}s`; };
-const LIST_FILE = path.join(tw.DIR, '.last-clips.json');
+const LIST_FILE = path.join(HERE, '.last-clips.json');
 const saveList = (c) => fs.writeFileSync(LIST_FILE, JSON.stringify(c));
 const loadList = () => (fs.existsSync(LIST_FILE) ? JSON.parse(fs.readFileSync(LIST_FILE, 'utf8')) : null);
 
@@ -64,8 +66,8 @@ try {
     console.log('Render:  node render/render-reel.mjs render/realclips/manifest.json');
 
   } else {
-    console.log('Usage: node fetch-clips.mjs <login|list|pull>');
+    console.log('Usage: node render/cli/fetch-clips.mjs <login|list|pull>');
   }
 } catch (e) {
-  die(e.message === 'NO_TOKEN' ? 'No token — run first:  node render/fetch-clips.mjs login' : e.message);
+  die(e.message === 'NO_TOKEN' ? 'No token — run first:  node render/cli/fetch-clips.mjs login' : e.message);
 }

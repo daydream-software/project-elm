@@ -1,6 +1,7 @@
 /* =============================================================================
  * Project Elm — overlay player
- * Reads playlist.json and chains clips together with a double-buffered crossfade.
+ * Loads a saved configuration (?config=<id>) and chains its clips with a
+ * double-buffered crossfade.
  *
  * Two stacked video layers (.layer):
  *   - the "front" layer (.front class, opacity 1) plays the current clip;
@@ -11,6 +12,23 @@
  * Each clip is a direct MP4 played in a <video> (fully controlled transitions).
  * A per-clip safety timer forces the reel forward if a clip's MP4 is missing or
  * corrupt (so no timeupdate/ended ever fires) — the overlay never stalls on black.
+ *
+ * Two live features, no OBS source refresh ever required:
+ *  - Live reload: an SSE connection re-fetches the configuration whenever it's
+ *    saved elsewhere and hot-swaps the upcoming play order (applyLive below) —
+ *    the clip currently on screen is never interrupted.
+ *  - OBS visibility: the `obsSourceActiveChanged` event (built into every OBS
+ *    Browser Source, see github.com/obsproject/obs-browser) tells us when this
+ *    source goes off/on program. Off program, we pause AND rewind to clip 1, so
+ *    the reel always resumes clean instead of mid-clip. This requires "Shutdown
+ *    source when not visible" to be OFF in the source's properties — with it on,
+ *    OBS reloads the page instead, which is the hard refresh this avoids.
+ *
+ * Debugging inside OBS: open this overlay's URL with `&debug=1` appended (e.g. as
+ * a temporary second Browser Source, or in a normal Chrome tab) to show a small
+ * on-screen HUD with live SSE / OBS-event / video state — there is no console to
+ * read otherwise. For real devtools on the actual OBS-rendered page, launch OBS
+ * with `--remote-debugging-port=9222` and open chrome://inspect in a normal Chrome.
  * ========================================================================== */
 
 const DEFAULTS = {
@@ -34,6 +52,7 @@ function showMessage(text) {
   els.message.textContent = text;
   els.message.hidden = false;
 }
+function hideMessage() { els.message.hidden = true; }
 
 /* Fisher–Yates shuffle (copy, does not mutate the input). */
 function shuffle(arr) {
@@ -60,17 +79,27 @@ class Player {
     this.settings = settings;
     this.pos = 0;              // index (in this.order) of the "front" clip
     this.transitioning = false;
+    this.suspended = false;    // true while off-program (OBS source inactive)
+    this.pendingOrder = null;  // a freshly-fetched order, applied at the next loop wrap
     this.layers = els.layerEls.map(makeLayer);
     this.front = this.layers[0];
     this.back = this.layers[1];
     this.transitionSec = settings.transitionMs / 1000;
 
-    // Permanent listeners on each <video>, guarded by state checks.
-    for (const layer of this.layers) {
-      layer.video.addEventListener('timeupdate', () => this.onTimeUpdate(layer));
-      layer.video.addEventListener('ended', () => this.onEnded(layer));
-      layer.video.addEventListener('error', () => this.onVideoError(layer));
-    }
+    // Listeners on each <video>, guarded by state checks. Kept so stop() can remove
+    // them — the DOM's <video> elements are shared/reused across Player instances
+    // (a configuration can go empty then get clips again over one page's lifetime,
+    // see main()'s applyFetched), and a dead instance's listeners would otherwise
+    // keep firing on the live video and fight the new instance for the same DOM.
+    this._listeners = this.layers.map(layer => {
+      const onTime = () => this.onTimeUpdate(layer);
+      const onEnd = () => this.onEnded(layer);
+      const onErr = () => this.onVideoError(layer);
+      layer.video.addEventListener('timeupdate', onTime);
+      layer.video.addEventListener('ended', onEnd);
+      layer.video.addEventListener('error', onErr);
+      return { layer, onTime, onEnd, onErr };
+    });
   }
 
   async start() {
@@ -126,7 +155,7 @@ class Player {
   }
 
   onTimeUpdate(layer) {
-    if (layer !== this.front || this.transitioning) return;
+    if (layer !== this.front || this.transitioning || this.suspended) return;
     const v = layer.video;
     if (!isFinite(v.duration)) return;
     if (v.duration - v.currentTime <= this.transitionSec) this.beginTransition();
@@ -134,17 +163,17 @@ class Player {
 
   onEnded(layer) {
     // Safety net: clip shorter than the transition, or unknown duration.
-    if (layer === this.front && !this.transitioning) this.beginTransition();
+    if (layer === this.front && !this.transitioning && !this.suspended) this.beginTransition();
   }
 
   onVideoError(layer) {
     // The MP4 broke. If it's on screen, skip past it now; a broken preload on the
     // back layer is caught by its safety timer once it becomes the front.
-    if (layer === this.front && !this.transitioning) this.beginTransition();
+    if (layer === this.front && !this.transitioning && !this.suspended) this.beginTransition();
   }
 
   beginTransition() {
-    if (this.transitioning) return;
+    if (this.transitioning || this.suspended) return;
     this.transitioning = true;
 
     let nextPos = this.pos + 1;
@@ -182,13 +211,83 @@ class Player {
     if (followPos < this.order.length) {
       this.prepare(this.back, this.order[followPos]);
     } else if (this.settings.loop) {
-      // Wrap point: for random, reshuffle the whole playlist for the next cycle
+      // Wrap point: a live-reloaded order (see applyLive) takes over here — the
+      // natural point to switch playlists without ever interrupting a clip that's
+      // already on screen. Otherwise, for random, reshuffle for the next cycle
       // (avoiding an immediate repeat of the clip currently playing) BEFORE
       // preloading its first clip — keeps the loop seamless AND varies the order
       // each cycle, so a random reel never replays the same sequence.
-      if (this.settings.order === 'random') this.reshuffleAvoiding(this.front.clip);
+      if (this.pendingOrder) { this.order = this.pendingOrder; this.pendingOrder = null; this.pos = -1; }
+      else if (this.settings.order === 'random') this.reshuffleAvoiding(this.front.clip);
       this.prepare(this.back, this.order[0]);
     }
+  }
+
+  /* Hot-swap in a freshly-fetched configuration (SSE live reload). Never touches
+   * what's currently on screen: while playing, the new order is staged and takes
+   * over at the next loop wrap (see finalize); while suspended (OBS source off
+   * program), it's safe to apply immediately since nothing is visible anyway. */
+  applyLive(settings, clips) {
+    this.settings = { ...this.settings, ...settings };
+    this.transitionSec = this.settings.transitionMs / 1000;
+    document.documentElement.style.setProperty('--transition-ms', this.settings.transitionMs + 'ms');
+    // Cosmetic toggles (title/game/channel) apply to the clip already on screen right away.
+    this.updateLowerThird(this.front.clip);
+    const freshOrder = this.settings.order === 'sequential' ? clips.slice() : shuffle(clips);
+    // main()'s applyFetched calls stop() instead of applyLive() once clips drops to
+    // zero — this is just a defensive fallback if applyLive is ever called directly.
+    if (!freshOrder.length) return;
+    if (this.suspended) { this.order = freshOrder; this.resetToStart(); }
+    else this.pendingOrder = freshOrder;
+  }
+
+  /* Pause both layers and rewind to clip 1 — used when the OBS source goes off
+   * program, so it resumes clean (see resume()) instead of mid-clip. */
+  suspend() {
+    if (this.suspended) return;
+    this.suspended = true;
+    for (const layer of this.layers) {
+      layer.video.pause();
+      if (layer.timer) { clearTimeout(layer.timer); layer.timer = null; }
+    }
+    this.resetToStart();
+  }
+
+  resetToStart() {
+    if (this.pendingOrder) { this.order = this.pendingOrder; this.pendingOrder = null; }
+    this.pos = 0;
+    this.transitioning = false;
+    this.prepare(this.front, this.order[0]);
+    this.front.el.classList.add('front');
+    this.back.el.classList.remove('front');
+    this.updateLowerThird(this.order[0]);
+    if (this.order.length > 1 || this.settings.loop) this.prepare(this.back, this.order[1 % this.order.length]);
+  }
+
+  /* Back on program: play from the rewound clip 1 (autoplay-gated the same way a
+   * fresh page load would be, in case a plain browser tab is previewing this). */
+  resume() {
+    if (!this.suspended) return;
+    this.suspended = false;
+    this.startLayer(this.front, /* firstPlay */ true);
+  }
+
+  /* Tear down completely — used when a live-reloaded configuration drops to zero
+   * downloaded clips (see main()'s applyFetched). Removes this instance's video
+   * listeners so a later Player built for the same DOM (once clips come back)
+   * doesn't fight a zombie instance still reacting to the shared <video> elements. */
+  stop() {
+    this.suspended = true;   // belt-and-suspenders: inert even if a listener fires mid-teardown
+    for (const { layer, onTime, onEnd, onErr } of this._listeners) {
+      layer.video.removeEventListener('timeupdate', onTime);
+      layer.video.removeEventListener('ended', onEnd);
+      layer.video.removeEventListener('error', onErr);
+      layer.video.pause();
+      if (layer.timer) { clearTimeout(layer.timer); layer.timer = null; }
+    }
+    this.front.el.classList.remove('front');
+    this.back.el.classList.remove('front');
+    els.lowerThird.classList.remove('show');
   }
 
   reshuffleAvoiding(avoidClip) {
@@ -224,29 +323,96 @@ class Player {
   }
 }
 
+async function fetchPlaylist(configId) {
+  const res = await fetch(`/api/configs/${encodeURIComponent(configId)}/playlist`, { cache: 'no-store' });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.json();
+}
+
+/* On-screen debug HUD (opt-in via ?debug=1 — see the header comment). There's no
+ * console to read on the actual page OBS renders, so this surfaces the three things
+ * worth checking live: is the SSE connection up, has an OBS visibility event ever
+ * arrived, and what's the real <video> state right now (which may differ from what
+ * OBS is visually compositing for an off-program source — OBS can stop requesting
+ * frames from a source that isn't on program or preview, so its output can look
+ * "frozen" even though the underlying page state already moved on). */
+function initDebugHud() {
+  const hud = document.createElement('div');
+  hud.id = 'debug-hud';
+  hud.style.cssText = 'position:fixed;top:8px;left:8px;z-index:9999;max-width:70vw;'
+    + 'background:rgba(0,0,0,.78);color:#7bffcf;font:12px/1.5 monospace;padding:8px 12px;'
+    + 'border-radius:6px;white-space:pre-wrap;pointer-events:none;';
+  document.body.appendChild(hud);
+  const state = { sse: 'connecting…', sseAt: null, obs: 'none received yet', obsAt: null };
+  const fmt = (d) => d ? d.toLocaleTimeString() : '';
+  setInterval(() => {
+    const v = document.querySelector('.layer.front .clip-video');
+    hud.textContent =
+      `SSE: ${state.sse}${state.sseAt ? '  (last update ' + fmt(state.sseAt) + ')' : ''}\n`
+      + `obsSourceActiveChanged: ${state.obs}${state.obsAt ? '  (' + fmt(state.obsAt) + ')' : ''}\n`
+      + `video: ${v ? (v.paused ? 'paused' : 'playing') + ' @ ' + v.currentTime.toFixed(1) + 's — ' + (v.src.split('/').pop()) : 'n/a'}`;
+  }, 300);
+  return state;
+}
+
 async function main() {
-  // playlist.json lives at the project root; the overlay is served from /overlay/.
-  // Overridable via ?playlist=... (path relative to the page).
-  const playlistUrl = new URLSearchParams(location.search).get('playlist') || '../playlist.json';
+  // A saved configuration's overlay URL, e.g. /overlay/?config=<id> — copy that
+  // from the "Open overlay" button in the selection UI into an OBS Browser Source.
+  const params = new URLSearchParams(location.search);
+  const configId = params.get('config');
+  if (!configId) {
+    showMessage('Missing ?config=<id> — open this overlay from a saved configuration in the selection UI.');
+    return;
+  }
+  const debugState = params.has('debug') ? initDebugHud() : null;
+
+  let player = null;   // null while the configuration has no downloaded clips
+
+  async function applyFetched(data) {
+    const settings = { ...DEFAULTS, ...(data.settings || {}) };
+    const clips = (data.clips || []).filter(c => c && c.mp4);
+    if (!clips.length) {
+      if (player) { player.stop(); player = null; }
+      showMessage('This configuration has no clips yet.');
+      return;
+    }
+    hideMessage();
+    if (!player) {
+      const order = settings.order === 'sequential' ? clips.slice() : shuffle(clips);
+      player = new Player(order, settings);
+      await player.start();
+    } else {
+      player.applyLive(settings, clips);
+    }
+  }
+
   let data;
-  try {
-    const res = await fetch(playlistUrl, { cache: 'no-store' });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    data = await res.json();
-  } catch (e) {
-    showMessage('Could not load ' + playlistUrl + ' — serve the overlay over http (node server.mjs). ' + e.message);
-    return;
-  }
+  try { data = await fetchPlaylist(configId); }
+  catch (e) { showMessage('Could not load configuration "' + configId + '" — ' + e.message); return; }
+  await applyFetched(data);
 
-  const settings = { ...DEFAULTS, ...(data.settings || {}) };
-  const clips = (data.clips || []).filter(c => c && c.mp4);
-  if (!clips.length) {
-    showMessage('playlist.json has no playable clips (needs an "mp4" field).');
-    return;
+  // Live reload: whenever the configuration is saved elsewhere (including dropping
+  // to / growing back from zero downloaded clips), re-fetch and hot-swap without
+  // ever refreshing this page.
+  const es = new EventSource(`/api/events?config=${encodeURIComponent(configId)}`);
+  if (debugState) {
+    es.onopen = () => { debugState.sse = 'connected'; };
+    es.onerror = () => { debugState.sse = 'error / reconnecting…'; };
   }
+  es.onmessage = async () => {
+    if (debugState) { debugState.sse = 'connected'; debugState.sseAt = new Date(); }
+    try { await applyFetched(await fetchPlaylist(configId)); }
+    catch (_) { /* config deleted, or a transient hiccup — keep playing what we have */ }
+  };
 
-  const order = settings.order === 'sequential' ? clips.slice() : shuffle(clips);
-  new Player(order, settings).start();
+  // OBS Browser Source visibility (built into OBS — see the header comment above):
+  // pause + rewind while this source is off program, resume clean when it's back.
+  window.addEventListener('obsSourceActiveChanged', (e) => {
+    const active = !!(e.detail && e.detail.active);
+    if (debugState) { debugState.obs = active ? 'active=true' : 'active=false'; debugState.obsAt = new Date(); }
+    if (!player) return;   // no reel loaded right now — nothing to suspend/resume
+    if (active) player.resume(); else player.suspend();
+  });
 }
 
 main();

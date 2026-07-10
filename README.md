@@ -80,6 +80,7 @@ Open **<http://localhost:8080/>**:
    `channel:manage:clips`; Twitch gates it by design.)*
 2. **Browse, pick & curate:** each clip shows a **✓ Downloaded** badge or a **Download**
    button. Download the ones you want (only downloaded clips can be included), then:
+   - **Search** by title or game to filter a large clip list.
    - **Include** a clip (click its thumbnail or the checkbox) to add it to the reel.
    - **Hide** a clip you'll never feature with the **✕** in its corner — it leaves the
      grid (and the reel). Toggle **Show hidden** to bring hidden clips back and **↩ Unhide**.
@@ -88,8 +89,23 @@ Open **<http://localhost:8080/>**:
    - Choose the play **order** (Random / By views / Most recent / Oldest, or **Custom**).
      **Custom** reveals a **Sequence** strip — drag the tiles to set the exact play order.
    - Toggle the **Title card / Channel / Game** overlays.
-3. **Preview in overlay** → opens the live reel. Add that overlay URL as a **Browser
-   source** in OBS — it autoplays with sound and crossfades between clips.
+3. **Save a configuration:** name it and click **Save** in the **Configurations** panel.
+   A configuration is a named, reusable reel (clip selection + order + toggles) — save
+   as many as you like (e.g. "Highlights", "Fails"), **search** the list by name, **Load**
+   one back into the editor, **Duplicate**, or **Delete** it.
+4. **Open overlay** (top-right, or a saved configuration's own **Open ↗**) → its live
+   reel, at a stable URL: `/overlay/?config=<id>`. Add that URL as a **Browser source**
+   in OBS — it autoplays with sound and crossfades between clips. Add several sources,
+   each pointed at a different saved configuration, to run more than one reel at once.
+
+   **This is fully live:** editing a saved configuration (adding/removing clips,
+   re-ordering, toggling title/channel/game, even downloading or deleting a clip it
+   uses) pushes to any overlay already open on it — no OBS source refresh needed. In
+   the source's **Properties**, leave **"Shutdown source when not visible" unchecked**
+   — that setting makes OBS reload the page on every scene switch, which is the hard
+   refresh this is designed to avoid. With it unchecked, the overlay also auto-detects
+   when its scene goes off program (OBS's built-in Browser Source API, no extra setup)
+   and pauses + rewinds to clip 1, so it always resumes clean instead of mid-clip.
 
 ### Render a fixed MP4 instead
 
@@ -105,9 +121,9 @@ The web UI covers everything, but the same fetch/select is available from the te
 (handy for scripting):
 
 ```bash
-node render/fetch-clips.mjs login              # one-time browser authorization
-node render/fetch-clips.mjs list [--days N] [--first N]
-node render/fetch-clips.mjs pull <all|1,3,5>   # download + write manifest.json
+node render/cli/fetch-clips.mjs login              # one-time browser authorization
+node render/cli/fetch-clips.mjs list [--days N] [--first N]
+node render/cli/fetch-clips.mjs pull <all|1,3,5>   # download + write manifest.json
 ```
 
 ## `manifest.json` schema (render path)
@@ -145,11 +161,13 @@ Each clip is normalized (letterbox to the canvas, constant fps), loudness-evened
 | `render/server.mjs` | local server: selection UI + Twitch API + serves everything |
 | `render/curate/` | the selection web UI (Daydream-branded) |
 | `render/twitch.mjs` | shared Twitch logic (auth / list / download) |
-| `render/fetch-clips.mjs` | optional CLI over `twitch.mjs` |
+| `render/configs.mjs` | saved reel configurations (name + clips + order + toggles) |
+| `render/cli/fetch-clips.mjs` | optional CLI over `twitch.mjs` |
 | `render/render-reel.mjs` | render engine (clips + manifest → one MP4) |
 | `overlay/` | the live crossfade overlay player (plays downloaded clips) |
 
-`.env` (your Client ID) and downloaded clips are gitignored.
+`.env` (your Client ID), downloaded clips, and saved configurations (`render/configs/`)
+are gitignored — all local user data.
 
 ## Notes
 
@@ -159,6 +177,9 @@ Each clip is normalized (letterbox to the canvas, constant fps), loudness-evened
   the landscape version for a 16:9 reel.
 - Verified end-to-end on a real channel: device-code login → list → download →
   live overlay (autoplays with sound in OBS) and rendered MP4.
+- The overlay's live reload uses a plain SSE connection back to `render/server.mjs` —
+  so the overlay only ever needs to be reachable at `http://localhost:8080`, same as
+  the selection UI.
 
 ## Not yet
 

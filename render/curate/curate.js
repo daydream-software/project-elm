@@ -1,17 +1,21 @@
 /* Selection UI: in-browser Twitch login → browse clips (with downloaded badge) →
    download the ones you want (only downloaded clips can be included) → hide the ones
-   you never want to feature → set a custom play order by drag & drop → preview in the
-   overlay. Talks to server.mjs. */
+   you never want to feature → set a custom play order by drag & drop → save as a named
+   configuration and open its live overlay URL (paste into an OBS Browser Source — any
+   number of saved configurations can run as separate sources at once). Talks to server.mjs. */
 
 const $ = (id) => document.getElementById(id);
 let clips = [];
 let sequence = [];          // included clip ids, in play order (custom drag order = source of truth)
 const hidden = new Set();    // clip ids the user never wants to feature
+let configs = [];           // saved configurations (name, sequence, order, toggles)
+let loadedConfigId = null;  // the config `sequence`/order/toggles below were loaded from (null = unsaved/new)
 
-// Persist the selection, order, and hidden set across refreshes.
-const SEL_KEY = 'elm.selected', ORDER_KEY = 'elm.order', HIDDEN_KEY = 'elm.hidden';
+// Persist the selection, order, hidden set, and in-progress configuration across refreshes.
+const SEL_KEY = 'elm.selected', ORDER_KEY = 'elm.order', HIDDEN_KEY = 'elm.hidden', LOADED_KEY = 'elm.loadedConfig';
 try { const a = JSON.parse(localStorage.getItem(SEL_KEY) || '[]'); if (Array.isArray(a)) sequence = a; } catch {}
 try { JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]').forEach(id => hidden.add(id)); } catch {}
+loadedConfigId = localStorage.getItem(LOADED_KEY) || null;
 const saveSel = () => { try { localStorage.setItem(SEL_KEY, JSON.stringify(sequence)); } catch {} };
 const saveHidden = () => { try { localStorage.setItem(HIDDEN_KEY, JSON.stringify([...hidden])); } catch {} };
 const isIncluded = (id) => sequence.includes(id);
@@ -30,12 +34,12 @@ const fmtDate = (iso) => { try { return new Date(iso).toLocaleDateString('en-US'
 
 /* ---- Views ---- */
 function showLogin(mode) {
-  $('login').hidden = false; $('controls').hidden = true; $('grid').innerHTML = ''; $('sequence').hidden = true;
+  $('login').hidden = false; $('controls').hidden = true; $('grid').innerHTML = ''; $('sequence').hidden = true; $('configs').hidden = true;
   $('login-idle').hidden = mode !== 'idle';
   $('login-code').hidden = mode !== 'code';
   $('login-setup').hidden = mode !== 'setup';
 }
-function showApp() { $('login').hidden = true; $('controls').hidden = false; }
+function showApp() { $('login').hidden = true; $('controls').hidden = false; $('configs').hidden = false; }
 
 /* ---- Login (device code) ---- */
 async function doLogin() {
@@ -67,8 +71,10 @@ async function loadClips() {
 function render() {
   const grid = $('grid');
   const showHidden = $('showHidden').checked;
-  const visible = clips.filter(c => showHidden || !hidden.has(c.id));
-  grid.innerHTML = visible.length ? '' : '<div class="empty">No clips.</div>';
+  const q = $('clipSearch').value.trim().toLowerCase();
+  const visible = clips.filter(c => (showHidden || !hidden.has(c.id))
+    && (!q || (c.title || '').toLowerCase().includes(q) || (c.game || '').toLowerCase().includes(q)));
+  grid.innerHTML = visible.length ? '' : `<div class="empty">${q ? 'No clips match your search.' : 'No clips.'}</div>`;
   for (const c of visible) {
     const isHidden = hidden.has(c.id);
     const thumb = (c.thumbnail || '').replace('{width}', '480').replace('{height}', '272');
@@ -100,7 +106,7 @@ function render() {
       </div>
       <div class="card-body">
         <div class="card-title">${esc(c.title || '(untitled)')}</div>
-        <div class="card-meta">👁 ${fmtViews(c.views)} · ${fmtDate(c.createdAt)}</div>
+        <div class="card-meta">${c.game ? esc(c.game) + ' · ' : ''}👁 ${fmtViews(c.views)} · ${fmtDate(c.createdAt)}</div>
       </div>
       <div class="card-foot">${foot}</div>`;
 
@@ -152,7 +158,6 @@ function updateActions() {
   const inc = clips.filter(c => c.downloaded && isIncluded(c.id) && !hidden.has(c.id)).length;
   const hid = clips.filter(c => hidden.has(c.id)).length;
   $('status').textContent = `${inc} included · ${dl}/${clips.length} downloaded${hid ? ` · ${hid} hidden` : ''}`;
-  $('preview').disabled = sequence.length === 0;
 }
 
 /* ---- Custom sequence (drag & drop) ---- */
@@ -288,14 +293,109 @@ async function deleteDownload(id) {
   } catch (e) { $('status').textContent = '⚠ ' + e.message; }
 }
 
-async function preview() {
+function openOverlay() {
+  if (!loadedConfigId) { alert('Save this as a configuration first, then open its overlay.'); return; }
+  window.open(`/overlay/?config=${encodeURIComponent(loadedConfigId)}`, '_blank');
+}
+
+/* ---- Saved configurations ---- */
+function setLoadedConfig(id) {
+  loadedConfigId = id;
+  try { id ? localStorage.setItem(LOADED_KEY, id) : localStorage.removeItem(LOADED_KEY); } catch {}
+  $('preview').disabled = !id;
+}
+
+async function loadConfigs() {
   try {
-    const data = await api('/api/playlist', {
+    const data = await api('/api/configs');
+    configs = data.configs;
+    renderConfigList();
+  } catch (e) { $('status').textContent = '⚠ ' + e.message; }
+}
+
+function renderConfigList() {
+  const list = $('configList');
+  const q = $('configSearch').value.trim().toLowerCase();
+  const visible = configs.filter(c => !q || c.name.toLowerCase().includes(q));
+  list.innerHTML = visible.length ? '' : `<div class="config-empty">${configs.length ? 'No configurations match your search.' : 'No saved configurations yet — set up a reel below, then Save.'}</div>`;
+  for (const c of visible) {
+    const row = document.createElement('div');
+    row.className = 'config-item' + (c.id === loadedConfigId ? ' loaded' : '');
+    row.innerHTML = `
+      <span class="config-item-name">${esc(c.name)}</span>
+      <span class="config-item-meta">${c.sequence.length} clip${c.sequence.length === 1 ? '' : 's'} · ${esc(c.order)}</span>
+      <div class="config-item-actions">
+        <button class="btn ghost load" type="button">Load</button>
+        <button class="btn ghost dup" type="button">Duplicate</button>
+        <a class="btn ghost open" href="/overlay/?config=${encodeURIComponent(c.id)}" target="_blank" rel="noreferrer">Open ↗</a>
+        <button class="del" type="button" title="Delete configuration" aria-label="Delete configuration">🗑</button>
+      </div>`;
+    row.querySelector('.load').addEventListener('click', () => loadConfig(c.id));
+    row.querySelector('.dup').addEventListener('click', () => duplicateConfig(c.id));
+    row.querySelector('.del').addEventListener('click', () => deleteConfigItem(c.id));
+    list.appendChild(row);
+  }
+}
+
+function loadConfig(id) {
+  const c = configs.find(x => x.id === id);
+  if (!c) return;
+  sequence = c.sequence.slice();
+  $('order').value = c.order;
+  localStorage.setItem(ORDER_KEY, c.order);
+  $('showTitle').checked = c.showTitle !== false;
+  $('showChannel').checked = c.showBroadcaster !== false;
+  $('showGame').checked = c.showGame !== false;
+  $('configName').value = c.name;
+  setLoadedConfig(id);
+  saveSel();
+  render();
+  $('status').textContent = `Loaded "${c.name}".`;
+}
+
+async function saveConfigNow() {
+  const name = $('configName').value.trim();
+  if (!name) { $('status').textContent = '⚠ Name the configuration before saving.'; $('configName').focus(); return; }
+  try {
+    const saved = await api('/api/configs', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ids: sequence, order: $('order').value, showTitle: $('showTitle').checked, showBroadcaster: $('showChannel').checked, showGame: $('showGame').checked }),
+      body: JSON.stringify({
+        id: loadedConfigId || undefined, name, sequence, order: $('order').value,
+        showTitle: $('showTitle').checked, showBroadcaster: $('showChannel').checked, showGame: $('showGame').checked,
+      }),
     });
-    if (!data.count) { $('status').textContent = '⚠ No downloaded clips included — download + include some first.'; return; }
-    window.open(data.url, '_blank');
+    setLoadedConfig(saved.id);
+    await loadConfigs();
+    $('status').textContent = `Saved "${saved.name}". Any open overlay for it updates live.`;
+  } catch (e) { $('status').textContent = '⚠ ' + e.message; }
+}
+
+function newConfig() {
+  setLoadedConfig(null);
+  $('configName').value = '';
+  $('configName').focus();
+  $('status').textContent = 'Editing a new (unsaved) configuration.';
+}
+
+async function duplicateConfig(id) {
+  const c = configs.find(x => x.id === id);
+  if (!c) return;
+  try {
+    await api('/api/configs', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: `${c.name} (copy)`, sequence: c.sequence, order: c.order, showTitle: c.showTitle, showBroadcaster: c.showBroadcaster, showGame: c.showGame }),
+    });
+    await loadConfigs();
+  } catch (e) { $('status').textContent = '⚠ ' + e.message; }
+}
+
+async function deleteConfigItem(id) {
+  const c = configs.find(x => x.id === id);
+  if (!confirm(`Delete configuration "${c ? c.name : id}"? Any overlay open on it will stop updating.`)) return;
+  try {
+    await api(`/api/configs/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (id === loadedConfigId) setLoadedConfig(null);
+    await loadConfigs();
   } catch (e) { $('status').textContent = '⚠ ' + e.message; }
 }
 
@@ -306,7 +406,11 @@ async function init() {
   $('dlall').addEventListener('click', downloadAll);
   $('all').addEventListener('click', () => { clips.forEach(c => { if (c.downloaded && !hidden.has(c.id) && !isIncluded(c.id)) sequence.push(c.id); }); render(); });
   $('none').addEventListener('click', () => { sequence = []; render(); });
-  $('preview').addEventListener('click', preview);
+  $('preview').addEventListener('click', openOverlay);
+  $('clipSearch').addEventListener('input', render);
+  $('configSave').addEventListener('click', saveConfigNow);
+  $('configNew').addEventListener('click', newConfig);
+  $('configSearch').addEventListener('input', renderConfigList);
   $('theme-toggle').addEventListener('click', () => {
     const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
     if (next === 'light') document.documentElement.setAttribute('data-theme', 'light');
@@ -323,10 +427,17 @@ async function init() {
     $(id).addEventListener('change', () => localStorage.setItem('elm.' + id, $(id).checked ? '1' : '0'));
   }
   initDrag();
+  $('preview').disabled = !loadedConfigId;
   try {
     const st = await api('/api/status');
     if (!st.hasCreds) return showLogin('setup');
-    if (st.authorized) { showApp(); loadClips(); } else showLogin('idle');
+    if (st.authorized) {
+      showApp(); loadClips();
+      await loadConfigs();
+      // A config saved in a previous session may have since been deleted elsewhere.
+      const still = configs.find(c => c.id === loadedConfigId);
+      if (still) $('configName').value = still.name; else setLoadedConfig(null);
+    } else showLogin('idle');
   } catch { showLogin('idle'); }
 }
 init();

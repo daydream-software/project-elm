@@ -2,11 +2,11 @@
 .env
 # Twitch user token + cached listings (sensitive)
 render/.token.json
-render/.last-clips.json
+render/cli/.last-clips.json
 # Downloaded clips / rendered reels
 render/realclips/
-# Generated preview playlist (written by the server)
-overlay/reel.playlist.json
+# Saved reel configurations (local user data)
+render/configs/
 
 # Node
 node_modules/
