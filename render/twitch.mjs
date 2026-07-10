@@ -42,6 +42,17 @@ async function postForm(url, params) {
 export const clipFile = (clip) => path.join(CLIPS_DIR, `${clip.id}.mp4`);
 export const isDownloaded = (clip) => fs.existsSync(clipFile(clip));
 
+/** Delete a downloaded clip's local MP4 (reversible — it can be re-downloaded).
+ *  Returns true if a file was removed. The id is validated to a safe charset so a
+ *  crafted id can't escape CLIPS_DIR. */
+export function deleteDownload(id) {
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(id)) return false;
+  const f = path.join(CLIPS_DIR, `${id}.mp4`);
+  if (!fs.existsSync(f)) return false;
+  fs.unlinkSync(f);
+  return true;
+}
+
 /* ---- Device Code Flow ---- */
 export async function login({ onCode } = {}) {
   if (!CLIENT_ID) throw new Error('Missing TWITCH_CLIENT_ID (.env). See README.md → Setup.');

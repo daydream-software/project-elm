@@ -69,18 +69,29 @@
       <option value="views">By views</option>
       <option value="recent">Most recent</option>
       <option value="oldest">Oldest first</option>
+      <option value="custom">Custom (drag order)</option>
     </select>
   </div>
   <button id="load" class="btn primary" type="button">Load clips</button>
   <label class="chk"><input id="showTitle" type="checkbox" checked /> Title card</label>
   <label class="chk"><input id="showChannel" type="checkbox" checked /> Channel</label>
   <label class="chk"><input id="showGame" type="checkbox" checked /> Game</label>
+  <label class="chk"><input id="showHidden" type="checkbox" /> Show hidden</label>
   <div class="bulk">
     <button id="dlall" class="btn ghost" type="button">Download all</button>
     <button id="all" class="btn ghost" type="button">Include all</button>
     <button id="none" class="btn ghost" type="button">Include none</button>
     <span id="status" class="status"></span>
   </div>
+</section>
+
+<!-- Custom play order (shown only when Order = Custom) -->
+<section id="sequence" class="sequence" hidden>
+  <div class="seq-head">
+    <span class="seq-label">Sequence</span>
+    <span class="seq-hint">drag the tiles to set the play order</span>
+  </div>
+  <div id="seq-list" class="seq-list"></div>
 </section>
 
 <main id="grid" class="grid"></main>

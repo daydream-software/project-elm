@@ -27,6 +27,7 @@ const ORDERS = {
   views:  { overlay: 'sequential', sort: (a, b) => b.view_count - a.view_count },
   recent: { overlay: 'sequential', sort: (a, b) => new Date(b.created_at) - new Date(a.created_at) },
   oldest: { overlay: 'sequential', sort: (a, b) => new Date(a.created_at) - new Date(b.created_at) },
+  custom: { overlay: 'sequential', sort: null },   // keep the exact incoming id order (drag sequence)
 };
 
 /* Kick off device-code login; resolve once we have the code (polling continues). */
@@ -97,12 +98,21 @@ const server = http.createServer(async (req, res) => {
       const result = await tw.downloadClips(chosen);
       return send(res, 200, { ...result, downloaded_ids: chosen.filter(tw.isDownloaded).map(c => c.id) });
     }
+    if (p === '/api/delete' && req.method === 'POST') {
+      // Delete the local MP4 for the given ids (reversible — re-downloadable). Does NOT
+      // touch Twitch. isDownloaded (a file-existence check) then reports "not downloaded".
+      const { ids } = JSON.parse(await readBody(req) || '{}');
+      if (!Array.isArray(ids) || !ids.length) return send(res, 400, { error: 'no ids' });
+      const deleted = ids.filter(id => tw.deleteDownload(id));
+      return send(res, 200, { deleted });
+    }
     if (p === '/api/playlist' && req.method === 'POST') {
       // Write an overlay playlist.json (mp4 = local downloaded files) for preview.
       const { ids, order, showTitle, showBroadcaster, showGame } = JSON.parse(await readBody(req) || '{}');
       const ord = ORDERS[order] || ORDERS.random;
       const clips = await tw.getClipsByIds(ids || []);   // resolve exact ids (not a top-100 refetch)
-      const chosen = (ids || []).map(id => clips.find(c => c.id === id)).filter(c => c && tw.isDownloaded(c)).sort(ord.sort);
+      const chosen = (ids || []).map(id => clips.find(c => c.id === id)).filter(c => c && tw.isDownloaded(c));
+      if (ord.sort) chosen.sort(ord.sort);               // custom = null sort → keep the incoming order
       const games = await tw.gameNames(chosen.map(c => c.game_id));
       const playlist = {
         settings: {

@@ -78,9 +78,16 @@ Open **<http://localhost:8080/>**:
    **auto-refreshed** — you won't log in again.
    *(Why a login? Downloading clips needs the broadcaster's consent, scope
    `channel:manage:clips`; Twitch gates it by design.)*
-2. **Browse & pick:** each clip shows a **✓ Downloaded** badge or a **Download**
-   button. Download the ones you want (only downloaded clips can be included), choose
-   the play **order** and the **Title card / Channel / Game** options.
+2. **Browse, pick & curate:** each clip shows a **✓ Downloaded** badge or a **Download**
+   button. Download the ones you want (only downloaded clips can be included), then:
+   - **Include** a clip (click its thumbnail or the checkbox) to add it to the reel.
+   - **Hide** a clip you'll never feature with the **✕** in its corner — it leaves the
+     grid (and the reel). Toggle **Show hidden** to bring hidden clips back and **↩ Unhide**.
+   - **Delete a download** with the **🗑** on a downloaded card — removes the local `.mp4`
+     (frees disk, leaves the reel). Reversible: the clip stays on Twitch, re-download anytime.
+   - Choose the play **order** (Random / By views / Most recent / Oldest, or **Custom**).
+     **Custom** reveals a **Sequence** strip — drag the tiles to set the exact play order.
+   - Toggle the **Title card / Channel / Game** overlays.
 3. **Preview in overlay** → opens the live reel. Add that overlay URL as a **Browser
    source** in OBS — it autoplays with sound and crossfades between clips.
 
