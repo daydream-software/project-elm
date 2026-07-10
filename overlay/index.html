@@ -1,0 +1,32 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Project Elm — Overlay</title>
+<link rel="icon" href="daydream-mark.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="style.css" />
+
+<!-- Two stacked video layers for double buffering / crossfade -->
+<div id="stage">
+  <div class="layer" id="layer-a">
+    <video class="clip-video" playsinline preload="auto"></video>
+    <iframe class="clip-iframe" allow="autoplay; fullscreen" allowfullscreen hidden></iframe>
+  </div>
+  <div class="layer" id="layer-b">
+    <video class="clip-video" playsinline preload="auto"></video>
+    <iframe class="clip-iframe" allow="autoplay; fullscreen" allowfullscreen hidden></iframe>
+  </div>
+
+  <!-- Lower-third: title / game / broadcaster of the current clip -->
+  <div id="lower-third">
+    <div class="lt-title"></div>
+    <div class="lt-meta"></div>
+  </div>
+
+  <!-- Safety net: if the browser blocks autoplay (a normal tab), show a button.
+       In OBS this stays hidden — autoplay is allowed. -->
+  <button id="start-gate" hidden>▶ Start</button>
+
+  <!-- Diagnostic messages (empty playlist, errors…) -->
+  <div id="message" hidden></div>
+</div>
+
+<script src="player.js"></script>

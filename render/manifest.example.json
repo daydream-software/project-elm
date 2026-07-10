@@ -1,0 +1,14 @@
+{
+  "output": "reel.mp4",
+  "width": 1920,
+  "height": 1080,
+  "fps": 30,
+  "transition": "fade",
+  "transitionMs": 800,
+  "showTitles": true,
+  "clips": [
+    { "file": "clip1.mp4", "title": "Clutch of the year", "game": "Valorant" },
+    { "file": "clip2.mp4", "title": "Fail of the week", "game": "Just Chatting" },
+    { "file": "clip3.mp4", "title": "Best play" }
+  ]
+}

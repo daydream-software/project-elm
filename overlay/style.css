@@ -1,0 +1,104 @@
+:root {
+  /* Fade duration — overridden by playlist.json (settings.transitionMs) via JS */
+  --transition-ms: 600ms;
+  /* Background: "black" for a full-frame reel, "transparent" to composite in OBS */
+  --bg: #000;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); }
+
+#stage {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  font-family: 'Geist', system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+@font-face {
+  font-family: 'Geist';
+  src: url('/fonts/Geist-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+/* ---- Video layers ---- */
+.layer {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity var(--transition-ms) ease-in-out;
+  will-change: opacity;
+}
+.layer.front { opacity: 1; }
+
+.clip-video,
+.clip-iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  /* contain = no crop, black letterbox; switch to "cover" to fill */
+  object-fit: contain;
+  background: #000;
+}
+.clip-iframe[hidden],
+.clip-video[hidden] { display: none; }
+
+/* ---- Lower-third ---- */
+#lower-third {
+  position: absolute;
+  left: 3.5%;
+  bottom: 6%;
+  max-width: 60%;
+  padding: 0.55em 1em;
+  border-radius: 10px;
+  background: linear-gradient(90deg, rgba(0,0,0,0.72), rgba(0,0,0,0.35));
+  color: #fff;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 400ms ease, transform 400ms ease;
+  pointer-events: none;
+  text-shadow: 0 2px 6px rgba(0,0,0,0.85);
+}
+#lower-third.show { opacity: 1; transform: translateY(0); }
+/* Dark outline so the title stays readable over any clip (bright or busy).
+   paint-order: stroke fill keeps the stroke behind the glyph, not eating into it. */
+.lt-title, .lt-meta { paint-order: stroke fill; }
+.lt-title { font-size: clamp(18px, 2.4vw, 34px); font-weight: 700; line-height: 1.15;
+  -webkit-text-stroke: 3px rgba(0, 0, 0, 0.92); }
+.lt-meta  { font-size: clamp(12px, 1.4vw, 18px); font-weight: 500; opacity: 0.85; margin-top: 0.15em;
+  -webkit-text-stroke: 2px rgba(0, 0, 0, 0.92); }
+
+/* ---- Start button (only if autoplay is blocked) ---- */
+#start-gate {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 0.8em 1.6em;
+  font-size: 22px;
+  font-weight: 700;
+  color: #fff;
+  background: #9146ff;
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+}
+#start-gate[hidden] { display: none; }
+
+/* ---- Diagnostics ---- */
+#message {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  color: #fff;
+  font-size: 20px;
+  text-align: center;
+  padding: 1em 1.4em;
+  background: rgba(0,0,0,0.6);
+  border-radius: 10px;
+  max-width: 80%;
+}
+#message[hidden] { display: none; }
