@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as metrics from './metrics.mjs';
 
 export const DIR = path.dirname(fileURLToPath(import.meta.url));
 export const CLIPS_DIR = path.join(DIR, 'realclips');
@@ -35,6 +36,7 @@ const saveJson = (f, o) => { fs.writeFileSync(f, JSON.stringify(o, null, 2)); tr
 
 async function postForm(url, params) {
   const r = await fetch(url, { method: 'POST', body: new URLSearchParams(params) });
+  metrics.recordTwitchCall();
   return { ok: r.ok, status: r.status, j: await r.json().catch(() => ({})) };
 }
 
@@ -100,6 +102,7 @@ export async function token() {
 /* ---- Helix ---- */
 async function helix(pathq, t) {
   const r = await fetch(`${HELIX}/${pathq}`, { headers: { 'Client-Id': CLIENT_ID, Authorization: 'Bearer ' + t.access_token } });
+  metrics.recordTwitchCall();
   if (!r.ok) throw new Error(`Helix ${pathq.split('?')[0]} → ${r.status} ${await r.text()}`);
   return r.json();
 }
@@ -146,6 +149,7 @@ async function resolveUrls(broadcasterId, editorId, ids, t) {
   const qs = `broadcaster_id=${encodeURIComponent(broadcasterId)}&editor_id=${encodeURIComponent(editorId)}&`
            + ids.map(id => 'clip_id=' + encodeURIComponent(id)).join('&');
   const r = await fetch(`${HELIX}/clips/downloads?${qs}`, { headers: { 'Client-Id': CLIENT_ID, Authorization: 'Bearer ' + t.access_token } });
+  metrics.recordTwitchCall();
   const body = await r.text();
   if (!r.ok) throw new Error(`clips/downloads → ${r.status} ${body}`);
   return (JSON.parse(body).data) || [];
@@ -169,6 +173,8 @@ export async function downloadClips(clips, onProgress = () => {}) {
       if (!url) { onProgress({ id: c.id, status: 'error' }); continue; }
       onProgress({ id: c.id, status: 'downloading' });
       const buf = Buffer.from(await (await fetch(url)).arrayBuffer());
+      metrics.recordTwitchCall();
+      metrics.recordTwitchBytes(buf.length);
       fs.writeFileSync(clipFile(c), buf);
       onProgress({ id: c.id, status: 'done' });
       count++;

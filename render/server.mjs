@@ -14,6 +14,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as tw from './twitch.mjs';
 import * as cfg from './configs.mjs';
+import * as metrics from './metrics.mjs';
+import * as dashboard from './dashboard.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');            // repo root (serves /overlay/, /render/…)
@@ -60,6 +62,7 @@ const subscribers = new Map();   // config id -> Set<ServerResponse>
 function subscribe(id, res) {
   let set = subscribers.get(id);
   if (!set) subscribers.set(id, set = new Set());
+  res._connectedAt = Date.now();   // read by dashboard.mjs to show "connected for…"
   set.add(res);
   return () => { set.delete(res); if (!set.size) subscribers.delete(id); };
 }
@@ -105,6 +108,7 @@ function serveStatic(res, urlPath) {
 }
 
 const server = http.createServer(async (req, res) => {
+  metrics.recordServerRequest();
   if (req.headers.host && !ALLOWED_HOSTS.has(req.headers.host)) { res.writeHead(403).end('Forbidden host'); return; }
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
@@ -190,12 +194,11 @@ const server = http.createServer(async (req, res) => {
     return serveStatic(res, req.url);
   } catch (e) {
     const msg = e.message === 'NO_TOKEN' ? 'Not logged in' : e.message;
-    if (e.message !== 'NO_TOKEN') console.error(e);
+    if (e.message !== 'NO_TOKEN') dashboard.log(`ERROR ${e.stack || e.message}`);
     return send(res, e.message === 'NO_TOKEN' ? 401 : 500, { error: msg });
   }
 });
 
 server.listen(PORT, '127.0.0.1', () => {   // localhost only — never expose to the LAN
-  console.log(`\n  Project Elm — selection UI at http://localhost:${PORT}/`);
-  console.log(tw.CLIENT_ID ? '' : '  ⚠ No TWITCH_CLIENT_ID (.env) — see README.md → Setup.');
+  dashboard.start({ port: PORT, subscribers, getLogin: () => LOGIN });
 });
