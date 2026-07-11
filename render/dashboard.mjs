@@ -26,7 +26,7 @@ const useColor = !process.env.NO_COLOR;
 
 const CLIP_STATS_SAFETY_MS = 30_000;   // periodic re-scan, in case a watch event was ever missed
 
-const state = { port: 0, subscribers: new Map(), getLogin: () => ({}) };
+const state = { port: 0, subscribers: new Map(), uiSubscribers: new Set(), getLogin: () => ({}) };
 const logLines = [];
 let panelActive = false;
 let timer = null;
@@ -130,18 +130,28 @@ function overlayLines() {
   return [`Overlays    ${rows.length} active (SSE-connected)`, ...rows];
 }
 
-function anyOverlayConnected() {
-  for (const set of state.subscribers.values()) if (set.size) return true;
-  return false;
+function overlayClientCount() {
+  let n = 0;
+  for (const set of state.subscribers.values()) n += set.size;
+  return n;
+}
+
+/* The two things actually worth a glance at a distance: is a curate UI tab open
+ * (uiSubscribers, a heartbeat SSE the page opens for its whole tab lifetime — see
+ * server.mjs's /api/ui/presence), and is an overlay connected (subscribers, same idea
+ * per config). Each gets its own dot so "someone's on the web UI" and "OBS is pulling
+ * a reel" read as distinct facts, not folded into one vague activity pulse. */
+function statusLine(label, count, extra) {
+  const on = count > 0;
+  if (on) pulseFrame++;
+  const dot = on ? colorize('●', pulseFrame % 2 ? '1;32' : '2;32') : colorize('○', '2');
+  const text = on ? extra : (label === 'Web UI' ? 'closed' : 'none connected');
+  return `${label.padEnd(12)}${dot} ${text}`;
 }
 
 function buildPanel() {
-  // A connected overlay holds its SSE request open indefinitely, so it never
-  // shows up as a fresh "request" after the initial connect — count it as
-  // activity on its own, not just recent request/twitch bursts.
-  const active = metrics.isRecentlyActive() || anyOverlayConnected();
-  if (active) pulseFrame++;
-  const pulse = active ? colorize('●', pulseFrame % 2 ? '1;32' : '2;32') : colorize('○', '2');
+  const uiCount = state.uiSubscribers.size;
+  const overlayCount = overlayClientCount();
 
   const clips = clipStats;
   const configs = cfg.listConfigs();
@@ -149,8 +159,9 @@ function buildPanel() {
   const twitchRate = metrics.twitchRatePerMin();
 
   const lines = [
-    `${colorize('Project Elm', '1')} — dashboard  ${pulse}`,
-    `Web UI      http://localhost:${state.port}/`,
+    `${colorize('Project Elm', '1')} — dashboard`,
+    `${statusLine('Web UI', uiCount, `open (${uiCount} tab${uiCount === 1 ? '' : 's'})`)} — http://localhost:${state.port}/`,
+    statusLine('Overlay', overlayCount, `${overlayCount} connected`),
     `Twitch      ${authLine()}`,
     `Clips       ${clips.count} downloaded · ${humanSize(clips.bytes)} on disk`,
     `Configs     ${configs.length} saved`,
@@ -179,11 +190,13 @@ function render() {
 }
 
 /** Start the dashboard. `subscribers` is server.mjs's live config-id → Set<res>
- *  map (passed by reference so this always reflects the real connection
- *  state); `getLogin` returns its in-memory device-login state. */
-export function start({ port, subscribers, getLogin }) {
+ *  map (passed by reference so this always reflects the real connection state);
+ *  `uiSubscribers` is the same idea for open curate-UI tabs; `getLogin` returns
+ *  its in-memory device-login state. */
+export function start({ port, subscribers, uiSubscribers, getLogin }) {
   state.port = port;
   if (subscribers) state.subscribers = subscribers;
+  if (uiSubscribers) state.uiSubscribers = uiSubscribers;
   if (getLogin) state.getLogin = getLogin;
 
   if (!process.stdout.isTTY) {

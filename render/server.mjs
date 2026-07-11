@@ -6,6 +6,10 @@
  * (PUBLIC app, no secret). Serves the repo so /overlay/ and the downloaded clips
  * are reachable. Configurations live in render/configs/ (configs.mjs); saving one
  * pushes a live-reload event (SSE) to any overlay currently open for it.
+ *
+ * Browsing/curating/the overlay all read the local catalog (catalog.mjs) — Twitch
+ * itself is only touched by login, an actual download, and an explicit "Update"
+ * refresh (POST /api/catalog/refresh), never on a normal page load.
  * ========================================================================== */
 
 import http from 'node:http';
@@ -14,6 +18,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as tw from './twitch.mjs';
 import * as cfg from './configs.mjs';
+import * as catalog from './catalog.mjs';
 import * as metrics from './metrics.mjs';
 import * as dashboard from './dashboard.mjs';
 
@@ -28,23 +33,27 @@ let LOGIN = { authorized: tw.hasToken() };     // in-memory device-login state
 // Play order → (overlay order, display sort). 'random' = overlay reshuffles each
 // loop; the others play in a fixed sorted order.
 const ORDERS = {
-  random: { overlay: 'random',     sort: (a, b) => b.view_count - a.view_count },
-  views:  { overlay: 'sequential', sort: (a, b) => b.view_count - a.view_count },
-  recent: { overlay: 'sequential', sort: (a, b) => new Date(b.created_at) - new Date(a.created_at) },
-  oldest: { overlay: 'sequential', sort: (a, b) => new Date(a.created_at) - new Date(b.created_at) },
+  random: { overlay: 'random',     sort: (a, b) => b.views - a.views },
+  views:  { overlay: 'sequential', sort: (a, b) => b.views - a.views },
+  recent: { overlay: 'sequential', sort: (a, b) => new Date(b.createdAt) - new Date(a.createdAt) },
+  oldest: { overlay: 'sequential', sort: (a, b) => new Date(a.createdAt) - new Date(b.createdAt) },
   custom: { overlay: 'sequential', sort: null },   // keep the exact incoming id order (drag sequence)
 };
 
-/* Resolve a saved config into what the overlay actually needs: current metadata for
- * its clips (title/game may have changed on Twitch) filtered to what's downloaded
- * right now, in the config's play order. Always computed fresh — never cached — so
- * an overlay re-fetching this after an SSE "update" ping sees the live state. */
-async function resolvePlaylist(config) {
+/* Resolve a saved config into what the overlay actually needs: catalog metadata for
+ * its clips, filtered to what's downloaded right now, in the config's play order. Reads
+ * the local catalog only — no live Twitch calls — so a clip deleted on Twitch AFTER
+ * being downloaded keeps playing (cached title/game/broadcaster) instead of silently
+ * dropping out of the reel. Always recomputed fresh from disk (never cached in memory)
+ * so an overlay re-fetching this after an SSE "update" ping sees the current state. */
+function resolvePlaylist(config) {
   const ord = ORDERS[config.order] || ORDERS.random;
-  const clips = await tw.getClipsByIds(config.sequence || []);
-  const chosen = (config.sequence || []).map(id => clips.find(c => c.id === id)).filter(c => c && tw.isDownloaded(c));
+  const seq = config.sequence || [];
+  const chosen = seq
+    .filter(id => tw.isDownloadedId(id))
+    .map(id => { const e = catalog.getEntry(id); return e ? { id, ...e } : null; })
+    .filter(Boolean);
   if (ord.sort) chosen.sort(ord.sort);
-  const games = await tw.gameNames(chosen.map(c => c.game_id));
   return {
     settings: {
       order: ord.overlay, loop: true, transitionMs: 700, muted: false,
@@ -52,7 +61,7 @@ async function resolvePlaylist(config) {
       showBroadcaster: config.showBroadcaster !== false,
       showGame: config.showGame !== false,
     },
-    clips: chosen.map(c => ({ mp4: `/render/realclips/${c.id}.mp4`, title: c.title, broadcaster: c.broadcaster_name, game: games[c.game_id] || '', duration: c.duration })),
+    clips: chosen.map(c => ({ mp4: `/render/realclips/${c.id}.mp4`, title: c.title, broadcaster: c.broadcaster, game: c.game, duration: c.duration })),
   };
 }
 
@@ -71,6 +80,19 @@ function notify(id) {
   if (!set) return;
   for (const res of set) res.write('data: update\n\n');
 }
+
+/* ---- SSE: push catalog-refresh progress to the "Update" button's progress bar. ---- */
+const catalogSubscribers = new Set();
+function catalogBroadcast(obj) {
+  const line = `data: ${JSON.stringify(obj)}\n\n`;
+  for (const res of catalogSubscribers) res.write(line);
+}
+let catalogRefreshing = false;
+
+/* ---- SSE: a lightweight heartbeat the curate UI opens for its whole tab lifetime —
+ * lets the CLI dashboard report "web UI open" as a real connection, not a guess from
+ * recent request activity (which fires just as easily for a stray curl). ---- */
+const uiSubscribers = new Set();
 
 /* Kick off device-code login; resolve once we have the code (polling continues). */
 function startLogin() {
@@ -124,33 +146,92 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { verification_uri: code.verification_uri, user_code: code.user_code });
     }
     if (p === '/api/clips') {
-      const days = Number(url.searchParams.get('days')) || 0;
-      const first = Number(url.searchParams.get('first')) || 30;
-      const { user, clips } = await tw.listClips({ days, first });
-      const games = await tw.gameNames(clips.map(c => c.game_id));
-      const out = clips.map(c => ({
-        id: c.id, title: c.title, game: games[c.game_id] || '', views: c.view_count,
-        duration: c.duration, createdAt: c.created_at, thumbnail: c.thumbnail_url,
-        downloaded: tw.isDownloaded(c),
+      // Reads the local catalog only — no Twitch call, ever, on this path. Returns
+      // EVERY cataloged clip; Period/Max/search/Show-hidden are pure client-side
+      // filters (see curate.js visibleClips()) so they apply instantly, no round-trip.
+      const known = catalog.getAll();
+      const fromCatalog = Object.entries(known).map(([id, e]) => ({
+        id, title: e.title, game: e.game, views: e.views, duration: e.duration, createdAt: e.createdAt,
+        thumbnail: e.missing ? (tw.generatedThumbUrl(id) || e.thumbnail) : e.thumbnail,
+        downloaded: tw.isDownloadedId(id), orphaned: !!e.missing,
       }));
-      return send(res, 200, { user: { id: user.id, name: user.display_name }, clips: out });
+      // A downloaded file with no catalog entry at all (dropped in manually, or grabbed
+      // before the very first catalog Update) still belongs in the grid.
+      const knownIds = new Set(Object.keys(known));
+      const uncataloged = tw.listDownloadedIds().filter(id => !knownIds.has(id)).map(id => ({
+        id, title: '(not yet cataloged — click Update)', game: '', views: 0, duration: 0, createdAt: null,
+        thumbnail: tw.generatedThumbUrl(id) || '', downloaded: true, orphaned: true,
+      }));
+      const combined = [...fromCatalog, ...uncataloged].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      return send(res, 200, { clips: combined, catalogUpdatedAt: catalog.lastUpdated() });
     }
     if (p === '/api/download' && req.method === 'POST') {
       const { ids } = JSON.parse(await readBody(req) || '{}');
       if (!Array.isArray(ids) || !ids.length) return send(res, 400, { error: 'no ids' });
       const chosen = await tw.getClipsByIds(ids);   // resolve exact ids (not a top-100 refetch)
+      const games = await tw.gameNames(chosen.map(c => c.game_id));
       const result = await tw.downloadClips(chosen);
+      const downloaded_ids = chosen.filter(tw.isDownloaded).map(c => c.id);
+      for (const c of chosen) {
+        if (!tw.isDownloadedId(c.id)) continue;
+        catalog.upsert(c.id, {
+          title: c.title, game: games[c.game_id] || '', views: c.view_count, duration: c.duration,
+          createdAt: c.created_at, thumbnail: c.thumbnail_url, broadcaster: c.broadcaster_name,
+        });
+      }
       cfg.configsReferencing(ids).forEach(notify);   // any live overlay using these clips: refresh
-      return send(res, 200, { ...result, downloaded_ids: chosen.filter(tw.isDownloaded).map(c => c.id) });
+      return send(res, 200, { ...result, downloaded_ids });
+    }
+    if (p === '/api/thumbnail' && req.method === 'POST') {
+      // A homemade fallback thumbnail (canvas frame-grab from the local mp4, uploaded by
+      // the client once the real Twitch thumbnail 404s — see curate.js handleThumbError).
+      const { id, dataUrl } = JSON.parse(await readBody(req) || '{}');
+      const ok = tw.saveGeneratedThumbnail(id, dataUrl);
+      return send(res, ok ? 200 : 400, { ok });
     }
     if (p === '/api/delete' && req.method === 'POST') {
-      // Delete the local MP4 for the given ids (reversible — re-downloadable). Does NOT
-      // touch Twitch. isDownloaded (a file-existence check) then reports "not downloaded".
+      // Delete the local MP4 for the given ids (reversible — re-downloadable — UNLESS
+      // Twitch no longer has it either, in which case forget it: nothing left to track).
       const { ids } = JSON.parse(await readBody(req) || '{}');
       if (!Array.isArray(ids) || !ids.length) return send(res, 400, { error: 'no ids' });
       const deleted = ids.filter(id => tw.deleteDownload(id));
+      for (const id of deleted) { const e = catalog.getEntry(id); if (e && e.missing) catalog.forget(id); }
       cfg.configsReferencing(ids).forEach(notify);   // any live overlay using these clips: refresh
       return send(res, 200, { deleted });
+    }
+    if (p === '/api/catalog/refresh' && req.method === 'POST') {
+      if (catalogRefreshing) return send(res, 409, { error: 'Refresh already in progress' });
+      catalogRefreshing = true;
+      send(res, 200, { started: true });   // respond immediately — progress comes over SSE
+      (async () => {
+        try {
+          const result = await catalog.refresh(({ fetched, page }) => catalogBroadcast({ type: 'progress', fetched, page }));
+          catalogBroadcast({ type: 'done', ...result, updatedAt: catalog.lastUpdated() });
+        } catch (e) {
+          catalogBroadcast({ type: 'error', error: e.message });
+          dashboard.log(`ERROR catalog refresh: ${e.stack || e.message}`);
+        } finally {
+          catalogRefreshing = false;
+        }
+      })();
+      return;
+    }
+    if (p === '/api/catalog/events') {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
+      res.write(':ok\n\n');
+      catalogSubscribers.add(res);
+      const heartbeat = setInterval(() => res.write(':hb\n\n'), 25_000);
+      req.on('close', () => { clearInterval(heartbeat); catalogSubscribers.delete(res); });
+      return;
+    }
+    if (p === '/api/ui/presence') {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
+      res.write(':ok\n\n');
+      res._connectedAt = Date.now();   // read by dashboard.mjs
+      uiSubscribers.add(res);
+      const heartbeat = setInterval(() => res.write(':hb\n\n'), 25_000);
+      req.on('close', () => { clearInterval(heartbeat); uiSubscribers.delete(res); });
+      return;
     }
     if (p === '/api/configs' && req.method === 'GET') {
       return send(res, 200, { configs: cfg.listConfigs() });
@@ -167,7 +248,7 @@ const server = http.createServer(async (req, res) => {
       if (sub === 'playlist' && req.method === 'GET') {
         const config = cfg.getConfig(id);
         if (!config) return send(res, 404, { error: 'Config not found' });
-        return send(res, 200, await resolvePlaylist(config));
+        return send(res, 200, resolvePlaylist(config));
       }
       if (!sub && req.method === 'GET') {
         const config = cfg.getConfig(id);
@@ -200,5 +281,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {   // localhost only — never expose to the LAN
-  dashboard.start({ port: PORT, subscribers, getLogin: () => LOGIN });
+  dashboard.start({ port: PORT, subscribers, uiSubscribers, getLogin: () => LOGIN });
 });

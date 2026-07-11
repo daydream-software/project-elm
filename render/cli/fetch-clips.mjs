@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as tw from '../twitch.mjs';
+import * as catalog from '../catalog.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const die = (m) => { console.error('✗ ' + m); process.exit(1); };
@@ -56,6 +57,14 @@ try {
       if (status === 'downloading') console.log(`  downloading  ${c.title}`);
       if (status === 'exists') console.log(`  (already)    ${c.title}`);
     });
+    const games = await tw.gameNames(chosen.map(c => c.game_id));
+    for (const c of chosen) {
+      if (!tw.isDownloadedId(c.id)) continue;
+      catalog.upsert(c.id, {
+        title: c.title, game: games[c.game_id] || '', views: c.view_count, duration: c.duration,
+        createdAt: c.created_at, thumbnail: c.thumbnail_url, broadcaster: c.broadcaster_name,
+      });
+    }
     const manifest = {
       output: 'reel.mp4', width: 1920, height: 1080, fps: 30,
       transition: 'fade', transitionMs: 800, showTitles: true,

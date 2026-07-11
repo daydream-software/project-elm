@@ -42,16 +42,36 @@ async function postForm(url, params) {
 
 /* ---- filenames / downloaded state ---- */
 export const clipFile = (clip) => path.join(CLIPS_DIR, `${clip.id}.mp4`);
-export const isDownloaded = (clip) => fs.existsSync(clipFile(clip));
+export const isDownloadedId = (id) => fs.existsSync(path.join(CLIPS_DIR, `${id}.mp4`));
+export const isDownloaded = (clip) => isDownloadedId(clip.id);
+export const listDownloadedIds = () => fs.existsSync(CLIPS_DIR)
+  ? fs.readdirSync(CLIPS_DIR).filter(f => f.endsWith('.mp4')).map(f => f.slice(0, -4))
+  : [];
 
-/** Delete a downloaded clip's local MP4 (reversible — it can be re-downloaded).
- *  Returns true if a file was removed. The id is validated to a safe charset so a
- *  crafted id can't escape CLIPS_DIR. */
+/* ---- Homemade thumbnail fallback: a frame grabbed client-side (canvas, no ffmpeg)
+ * from the downloaded mp4, uploaded once a clip's real Twitch thumbnail 404s. ---- */
+const thumbFile = (id) => path.join(CLIPS_DIR, `${id}.thumb.jpg`);
+export const generatedThumbUrl = (id) => fs.existsSync(thumbFile(id)) ? `/render/realclips/${id}.thumb.jpg` : null;
+export function saveGeneratedThumbnail(id, dataUrl) {
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(id)) return false;
+  if (!isDownloadedId(id)) return false;   // only for clips we actually have locally
+  const m = /^data:image\/jpeg;base64,([a-zA-Z0-9+/=]+)$/.exec(dataUrl || '');
+  if (!m) return false;
+  fs.writeFileSync(thumbFile(id), Buffer.from(m[1], 'base64'));
+  return true;
+}
+
+/** Delete a downloaded clip's local MP4 (reversible — it can be re-downloaded, UNLESS
+ *  Twitch no longer has it, in which case the caller should have already warned that
+ *  this is final). Returns true if a file was removed. The id is validated to a safe
+ *  charset so a crafted id can't escape CLIPS_DIR. */
 export function deleteDownload(id) {
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(id)) return false;
   const f = path.join(CLIPS_DIR, `${id}.mp4`);
   if (!fs.existsSync(f)) return false;
   fs.unlinkSync(f);
+  const th = thumbFile(id);
+  if (fs.existsSync(th)) fs.unlinkSync(th);
   return true;
 }
 
@@ -108,16 +128,54 @@ async function helix(pathq, t) {
 }
 export async function me(t) { return (await helix('users', t)).data[0]; }
 
+/** List clips for the authenticated broadcaster. `first` is a soft cap (Helix maxes a
+ *  single page at 100); pass 0/falsy for `first` to follow the `pagination.cursor`
+ *  Helix returns until it's exhausted — i.e. literally every clip in the period, not
+ *  just the first page. That's the only reliable way to get "100% of my clips": Twitch
+ *  doesn't expose a bulk export, and the Get Clips endpoint is paginated by design. */
 export async function listClips({ days = 0, first = 30 } = {}) {
   const t = await token();
   const u = await me(t);
-  let q = `clips?broadcaster_id=${u.id}&first=${Math.min(100, first)}`;
+  let base = `clips?broadcaster_id=${u.id}`;
   if (days) {
     const ended = new Date(), started = new Date(Date.now() - days * 86_400_000);
-    q += `&started_at=${started.toISOString()}&ended_at=${ended.toISOString()}`;
+    base += `&started_at=${started.toISOString()}&ended_at=${ended.toISOString()}`;
   }
-  const clips = ((await helix(q, t)).data || []).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  const wantAll = !first;
+  const clips = [];
+  let cursor = '';
+  for (let page = 0; page < 200; page++) {   // circuit breaker only — never hit in practice
+    const take = wantAll ? 100 : Math.min(100, first - clips.length);
+    if (take <= 0) break;
+    let q = `${base}&first=${take}`;
+    if (cursor) q += `&after=${encodeURIComponent(cursor)}`;
+    const r = await helix(q, t);
+    clips.push(...(r.data || []));
+    cursor = (r.pagination && r.pagination.cursor) || '';
+    if (!cursor) break;
+  }
+  clips.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   return { user: u, clips };
+}
+
+/** Fetch every clip Twitch has for the authenticated broadcaster, all-time, following
+ *  `pagination.cursor` to exhaustion — the local catalog is only useful if it's
+ *  complete. onProgress({fetched, page}) fires after each page lands. */
+export async function listAllClips(onProgress = () => {}) {
+  const t = await token();
+  const u = await me(t);
+  const clips = [];
+  let cursor = '';
+  for (let page = 0; page < 500; page++) {   // circuit breaker only — never hit in practice
+    let q = `clips?broadcaster_id=${u.id}&first=100`;
+    if (cursor) q += `&after=${encodeURIComponent(cursor)}`;
+    const r = await helix(q, t);
+    clips.push(...(r.data || []));
+    cursor = (r.pagination && r.pagination.cursor) || '';
+    onProgress({ fetched: clips.length, page: page + 1 });
+    if (!cursor) break;
+  }
+  return clips;
 }
 
 /** Fetch clips by their exact ids (Helix Get Clips id=…, up to 100 per call).
@@ -133,14 +191,19 @@ export async function getClipsByIds(ids) {
   return out;
 }
 
-/** Resolve Twitch game ids → names (game_id "0" = no game, skipped). */
+/** Resolve Twitch game ids → names (game_id "0" = no game, skipped). Batched at 100
+ *  ids/call (Helix's per-request cap) — a full-catalog refresh can easily span more
+ *  than 100 distinct games, so a single unbatched call would silently drop the rest. */
 export async function gameNames(ids) {
-  const uniq = [...new Set(ids.filter(id => id && id !== '0'))].slice(0, 100);
+  const uniq = [...new Set(ids.filter(id => id && id !== '0'))];
   if (!uniq.length) return {};
   const t = await token();
-  const j = await helix('games?' + uniq.map(id => 'id=' + encodeURIComponent(id)).join('&'), t);
   const map = {};
-  for (const g of j.data || []) map[g.id] = g.name;
+  for (let i = 0; i < uniq.length; i += 100) {
+    const batch = uniq.slice(i, i + 100);
+    const j = await helix('games?' + batch.map(id => 'id=' + encodeURIComponent(id)).join('&'), t);
+    for (const g of j.data || []) map[g.id] = g.name;
+  }
   return map;
 }
 
@@ -156,7 +219,9 @@ async function resolveUrls(broadcasterId, editorId, ids, t) {
 }
 
 /** Download the given clips (Helix clip objects). Skips ones already on disk.
- *  onProgress({id, status}) where status ∈ 'exists'|'downloading'|'done'|'error'. */
+ *  onProgress({id, status}) where status ∈ 'exists'|'downloading'|'done'|'error'.
+ *  Purely mechanical (bytes only) — the caller is responsible for recording the clip's
+ *  metadata into the catalog (see catalog.mjs) once a download actually succeeds. */
 export async function downloadClips(clips, onProgress = () => {}) {
   fs.mkdirSync(CLIPS_DIR, { recursive: true });
   const todo = clips.filter(c => { const has = isDownloaded(c); if (has) onProgress({ id: c.id, status: 'exists' }); return !has; });

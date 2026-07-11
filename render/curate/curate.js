@@ -32,14 +32,38 @@ const fmtDur = (s) => { s = Math.round(s || 0); const m = Math.floor(s / 60); re
 const fmtViews = (n) => Number(n || 0).toLocaleString('en-US');
 const fmtDate = (iso) => { try { return new Date(iso).toLocaleDateString('en-US'); } catch { return ''; } };
 
+/* ---- Collapsible sections (Filters, Options) — remembers open/closed per section. ---- */
+// Filters/Options tabs: each toggle shows/hides its own body independently. Collapsed
+// by default (localStorage holds '1' only once a tab has been explicitly opened).
+function initToggle(toggleId, bodyId, storageKey) {
+  const toggle = $(toggleId);
+  const body = $(bodyId);
+  const open = localStorage.getItem(storageKey) === '1';
+  body.hidden = !open;
+  toggle.setAttribute('aria-expanded', String(open));
+  toggle.classList.toggle('active', open);
+  toggle.addEventListener('click', () => {
+    const nowOpen = body.hidden;   // currently hidden → this click opens it
+    body.hidden = !nowOpen;
+    toggle.setAttribute('aria-expanded', String(nowOpen));
+    toggle.classList.toggle('active', nowOpen);
+    try { localStorage.setItem(storageKey, nowOpen ? '1' : '0'); } catch {}
+  });
+}
+
 /* ---- Views ---- */
 function showLogin(mode) {
-  $('login').hidden = false; $('controls').hidden = true; $('grid').innerHTML = ''; $('sequence').hidden = true; $('configs').hidden = true;
+  $('login').hidden = false; $('filterOptionsBar').hidden = true; $('grid').innerHTML = '';
+  $('sequence').hidden = true; $('catalogBar').hidden = true;
+  closeConfigsFlyout(); $('configsToggle').disabled = true; $('preview').disabled = true;
   $('login-idle').hidden = mode !== 'idle';
   $('login-code').hidden = mode !== 'code';
   $('login-setup').hidden = mode !== 'setup';
 }
-function showApp() { $('login').hidden = true; $('controls').hidden = false; $('configs').hidden = false; }
+function showApp() {
+  $('login').hidden = true; $('filterOptionsBar').hidden = false;
+  $('catalogBar').hidden = false; $('configsToggle').disabled = false;
+}
 
 /* ---- Login (device code) ---- */
 async function doLogin() {
@@ -56,11 +80,14 @@ async function doLogin() {
 }
 
 /* ---- Clips ---- */
+// Always fetches the FULL catalog (no days/first/all params — those are now pure
+// client-side filters in render(), applied instantly with no round-trip; see below).
 async function loadClips() {
   $('status').textContent = 'Loading…';
   try {
-    const data = await api(`/api/clips?days=${$('days').value}&first=${$('first').value}`);
+    const data = await api('/api/clips');
     clips = data.clips;
+    updateCatalogStatus(data.catalogUpdatedAt);
     render();
   } catch (e) {
     if (/logged in|NO_TOKEN/i.test(e.message)) return showLogin('idle');
@@ -68,12 +95,70 @@ async function loadClips() {
   }
 }
 
-function render() {
-  const grid = $('grid');
+/* ---- Local clip catalog: status line + "Update from Twitch" (SSE progress) ----
+   Browsing/curating always reads the catalog (loadClips above) — this is the only
+   action that talks to Twitch's clip listing directly. */
+function updateCatalogStatus(updatedAt) {
+  $('catalogStatus').textContent = updatedAt
+    ? `Catalog updated ${new Date(updatedAt).toLocaleString()}`
+    : 'Catalog never updated — click Update to pull your clips from Twitch';
+}
+function refreshCatalog() {
+  const btn = $('catalogUpdate');
+  btn.disabled = true;
+  $('catalogProgress').hidden = false;
+  $('catalogProgressText').textContent = 'Starting…';
+  const es = new EventSource('/api/catalog/events');
+  // `persistText` replaces the status line and STAYS there — loadClips() below would
+  // otherwise immediately stomp it back to the plain "Catalog updated …" message, which
+  // is why persistText is applied AFTER loadClips resolves, not before.
+  const finish = (progressText, persistText) => {
+    $('catalogProgressText').textContent = progressText;
+    es.close();
+    btn.disabled = false;
+    setTimeout(async () => {
+      $('catalogProgress').hidden = true;
+      await loadClips();
+      if (persistText) $('catalogStatus').textContent = persistText;
+    }, 1500);
+  };
+  es.onmessage = (ev) => {
+    let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+    if (msg.type === 'progress') {
+      $('catalogProgressText').textContent = `${msg.fetched} clips fetched…`;
+    } else if (msg.type === 'done') {
+      const when = new Date(msg.updatedAt).toLocaleString();
+      finish(
+        `Done — ${msg.total} clips (${msg.added} new, ${msg.updated} updated, ${msg.newlyMissing} removed from Twitch).`,
+        `Catalog updated ${when} — ${msg.total} clips (${msg.added} new, ${msg.updated} updated, ${msg.newlyMissing} removed from Twitch).`,
+      );
+    } else if (msg.type === 'error') {
+      finish('⚠ ' + msg.error, '⚠ Update failed: ' + msg.error);
+    }
+  };
+  es.onerror = () => { /* the 'error' message above (or a done) already handles cleanup in the normal case */ };
+  api('/api/catalog/refresh', { method: 'POST' }).catch(e => finish('⚠ ' + e.message, '⚠ Update failed: ' + e.message));
+}
+
+// Period + Max/Load-all + search + Show-hidden: pure client-side filters over the
+// already-loaded catalog — no fetch, applied instantly on every change (see init()'s
+// event wiring). Shared by render() and the bulk actions (Download all/Include all),
+// which should act on what's currently shown, not silently reach into the full catalog.
+function visibleClips() {
   const showHidden = $('showHidden').checked;
   const q = $('clipSearch').value.trim().toLowerCase();
-  const visible = clips.filter(c => (showHidden || !hidden.has(c.id))
+  const days = Number($('days').value) || 0;
+  const since = days ? Date.now() - days * 86_400_000 : 0;
+  const inPeriod = clips.filter(c => !since || !c.createdAt || new Date(c.createdAt) >= since);
+  const capped = $('allClips').checked ? inPeriod : inPeriod.slice(0, Number($('first').value) || 50);
+  return capped.filter(c => (showHidden || !hidden.has(c.id))
     && (!q || (c.title || '').toLowerCase().includes(q) || (c.game || '').toLowerCase().includes(q)));
+}
+
+function render() {
+  const grid = $('grid');
+  const q = $('clipSearch').value.trim().toLowerCase();
+  const visible = visibleClips();
   grid.innerHTML = visible.length ? '' : `<div class="empty">${q ? 'No clips match your search.' : 'No clips.'}</div>`;
   for (const c of visible) {
     const isHidden = hidden.has(c.id);
@@ -84,11 +169,14 @@ function render() {
     card.dataset.id = c.id;
 
     // Foot: hidden → Unhide; downloaded → Include + Delete download; else → Download.
+    const delTitle = c.orphaned
+      ? 'Delete download — this clip no longer exists on Twitch, so this is FINAL (no re-download possible)'
+      : 'Delete download — frees the file; you can re-download';
     const foot = isHidden
       ? `<button class="btn ghost unhide" type="button">↩ Unhide</button>`
       : c.downloaded
         ? `<label><input type="checkbox" ${included ? 'checked' : ''} /> Include</label>
-           <button class="del-dl" type="button" title="Delete download — frees the file; you can re-download" aria-label="Delete download">🗑</button>`
+           <button class="del-dl" type="button" title="${esc(delTitle)}" aria-label="Delete download">🗑</button>`
         : `<button class="btn ghost dl-one" type="button">⬇ Download</button>`;
 
     // Corner control: hide (only on non-hidden cards — hidden cards unhide from the foot).
@@ -97,11 +185,18 @@ function render() {
 
     const thumbAttrs = isHidden ? '' : ` role="button" tabindex="0" title="${c.downloaded ? 'Click to include / exclude' : 'Click to download'}"`;
 
+    const badgeClass = c.orphaned ? 'orphan' : (c.downloaded ? 'dl' : 'nodl');
+    const badgeText = c.orphaned ? '⚠ Removed from Twitch' : (c.downloaded ? '✓ Downloaded' : 'not downloaded');
+    // Twitch's own thumbnail never hard-fails for a deleted clip (see ensureHomemadeThumbnail
+    // above) — so for an orphaned clip with no generated thumbnail yet, kick one off now
+    // rather than waiting for an onerror that will never come.
+    if (c.orphaned && c.downloaded && !/\.thumb\.jpg(\?|$)/.test(c.thumbnail || '')) ensureHomemadeThumbnail(c.id);
     card.innerHTML = `
       <div class="thumb"${thumbAttrs}>
-        <img loading="lazy" src="${esc(thumb)}" alt="" />
-        <span class="badge ${c.downloaded ? 'dl' : 'nodl'}">${c.downloaded ? '✓ Downloaded' : 'not downloaded'}</span>
+        <img loading="lazy" src="${esc(thumb)}" alt="" data-id="${esc(c.id)}" onerror="handleThumbError(this)" />
+        <span class="badge ${badgeClass}">${badgeText}</span>
         <span class="dur">${fmtDur(c.duration)}</span>
+        <button class="play-btn" type="button" title="Preview clip" aria-label="Preview clip">▶</button>
         ${corner}
       </div>
       <div class="card-body">
@@ -109,6 +204,8 @@ function render() {
         <div class="card-meta">${c.game ? esc(c.game) + ' · ' : ''}👁 ${fmtViews(c.views)} · ${fmtDate(c.createdAt)}</div>
       </div>
       <div class="card-foot">${foot}</div>`;
+
+    card.querySelector('.play-btn').addEventListener('click', e => { e.stopPropagation(); openPreview(c); });
 
     if (isHidden) {
       card.querySelector('.unhide').addEventListener('click', () => toggleHidden(c.id));
@@ -157,14 +254,15 @@ function updateActions() {
   const dl = clips.filter(c => c.downloaded).length;
   const inc = clips.filter(c => c.downloaded && isIncluded(c.id) && !hidden.has(c.id)).length;
   const hid = clips.filter(c => hidden.has(c.id)).length;
-  $('status').textContent = `${inc} included · ${dl}/${clips.length} downloaded${hid ? ` · ${hid} hidden` : ''}`;
+  const orph = clips.filter(c => c.orphaned).length;
+  $('status').textContent = `${inc} included · ${dl}/${clips.length} downloaded${hid ? ` · ${hid} hidden` : ''}${orph ? ` · ${orph} removed from Twitch` : ''}`;
 }
 
 /* ---- Custom sequence (drag & drop) ---- */
 function renderSequence() {
   const wrap = $('sequence');
   const custom = $('order').value === 'custom';
-  wrap.hidden = !(custom && !$('controls').hidden);
+  wrap.hidden = !(custom && !$('filterOptionsBar').hidden);
   if (wrap.hidden) return;
   const list = $('seq-list');
   const items = sequence.map(id => clips.find(c => c.id === id)).filter(c => c && c.downloaded && !hidden.has(c.id));
@@ -274,7 +372,7 @@ async function downloadOne(id) {
 }
 
 async function downloadAll() {
-  const ids = clips.filter(c => !c.downloaded && !hidden.has(c.id)).map(c => c.id);
+  const ids = visibleClips().filter(c => !c.downloaded && !hidden.has(c.id)).map(c => c.id);
   if (!ids.length) { $('status').textContent = 'Nothing to download.'; return; }
   $('status').textContent = `Downloading ${ids.length}…`;
   try {
@@ -284,7 +382,11 @@ async function downloadAll() {
 }
 
 async function deleteDownload(id) {
-  if (!confirm('Delete this clip\'s downloaded file? It leaves the reel but stays on Twitch — you can re-download it anytime.')) return;
+  const c = clips.find(x => x.id === id);
+  const msg = c && c.orphaned
+    ? 'This clip no longer exists on Twitch — deleting the local file is FINAL, there is no re-downloading it. Delete anyway?'
+    : 'Delete this clip\'s downloaded file? It leaves the reel but stays on Twitch — you can re-download it anytime.';
+  if (!confirm(msg)) return;
   $('status').textContent = 'Deleting…';
   try {
     await api('/api/delete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids: [id] }) });
@@ -293,16 +395,87 @@ async function deleteDownload(id) {
   } catch (e) { $('status').textContent = '⚠ ' + e.message; }
 }
 
+/* ---- Clip preview (popup overlay, same window) ---- */
+function openPreview(c) {
+  const body = $('previewBody');
+  $('previewTitle').textContent = c.title || '(untitled)';
+  if (c.downloaded) {
+    body.innerHTML = `<video src="/render/realclips/${encodeURIComponent(c.id)}.mp4" controls autoplay playsinline></video>`;
+  } else {
+    // Not downloaded yet: fall back to the official Twitch clip embed (needs a user
+    // gesture to autoplay with sound, which this click just provided).
+    const parent = encodeURIComponent(location.hostname || 'localhost');
+    body.innerHTML = `<iframe src="https://clips.twitch.tv/embed?clip=${encodeURIComponent(c.id)}&parent=${parent}&autoplay=true" allow="autoplay; fullscreen" frameborder="0"></iframe>`;
+  }
+  $('previewOverlay').hidden = false;
+}
+function closePreview() {
+  $('previewOverlay').hidden = true;
+  $('previewBody').innerHTML = '';   // drop the video/iframe so playback actually stops
+}
+
+/* ---- Homemade thumbnail fallback (no ffmpeg / server dependency) ----
+   Twitch doesn't actually 404 a dead thumbnail URL — it 302-redirects to its own
+   generic .../ttv-static/404_preview-WxH.jpg placeholder, which <img> loads "successfully"
+   (no error event). So we can't detect this via onerror; instead, render() below calls
+   ensureHomemadeThumbnail directly for any orphaned clip that doesn't already have a
+   generated thumbnail. It grabs a frame from the LOCAL mp4 in a hidden <video>, draws it
+   to a <canvas>, and uploads the JPEG once so future loads (and the overlay's own
+   metadata) get it straight from the server instead of regenerating every time.
+   onerror is kept too, as a plain safety net for thumbnails that genuinely fail to load. */
+const thumbRegenAttempted = new Set();   // per-page-load: only try once per clip id
+async function ensureHomemadeThumbnail(id) {
+  if (thumbRegenAttempted.has(id)) return;
+  thumbRegenAttempted.add(id);
+  try {
+    const video = document.createElement('video');
+    video.src = `/render/realclips/${encodeURIComponent(id)}.mp4`;
+    video.muted = true;
+    video.playsInline = true;
+    await new Promise((resolve, reject) => {
+      video.addEventListener('loadedmetadata', () => { video.currentTime = Math.min(1, video.duration / 2); }, { once: true });
+      video.addEventListener('seeked', resolve, { once: true });
+      video.addEventListener('error', () => reject(new Error('video load failed')), { once: true });
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+    const img = document.querySelector(`img[data-id="${CSS.escape(id)}"]`);
+    if (img) { img.src = dataUrl; img.closest('.thumb').classList.remove('thumb-broken'); }
+    await api('/api/thumbnail', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, dataUrl }) });
+  } catch { /* leave whatever thumbnail is already showing — nothing more we can do */ }
+}
+function handleThumbError(img) {
+  img.closest('.thumb').classList.add('thumb-broken');
+  const c = clips.find(x => x.id === img.dataset.id);
+  if (c && c.downloaded) ensureHomemadeThumbnail(img.dataset.id);
+}
+
 function openOverlay() {
   if (!loadedConfigId) { alert('Save this as a configuration first, then open its overlay.'); return; }
   window.open(`/overlay/?config=${encodeURIComponent(loadedConfigId)}`, '_blank');
 }
 
-/* ---- Saved configurations ---- */
+/* ---- Saved configurations (flyout) ---- */
+function openConfigsFlyout() {
+  const el = $('configsFlyout');
+  el.hidden = false;
+  requestAnimationFrame(() => el.classList.add('open'));
+}
+function closeConfigsFlyout() {
+  const el = $('configsFlyout');
+  el.classList.remove('open');
+  setTimeout(() => { el.hidden = true; }, 200);   // matches the CSS slide transition
+}
+
 function setLoadedConfig(id) {
   loadedConfigId = id;
   try { id ? localStorage.setItem(LOADED_KEY, id) : localStorage.removeItem(LOADED_KEY); } catch {}
   $('preview').disabled = !id;
+  const c = id && configs.find(x => x.id === id);
+  $('configsToggle').textContent = c ? `Configurations: ${c.name}` : 'Configurations';
 }
 
 async function loadConfigs() {
@@ -322,8 +495,10 @@ function renderConfigList() {
     const row = document.createElement('div');
     row.className = 'config-item' + (c.id === loadedConfigId ? ' loaded' : '');
     row.innerHTML = `
-      <span class="config-item-name">${esc(c.name)}</span>
-      <span class="config-item-meta">${c.sequence.length} clip${c.sequence.length === 1 ? '' : 's'} · ${esc(c.order)}</span>
+      <div class="config-item-info">
+        <span class="config-item-name">${esc(c.name)}</span>
+        <span class="config-item-meta">${c.sequence.length} clip${c.sequence.length === 1 ? '' : 's'} · ${esc(c.order)}</span>
+      </div>
       <div class="config-item-actions">
         <button class="btn ghost load" type="button">Load</button>
         <button class="btn ghost dup" type="button">Duplicate</button>
@@ -402,11 +577,26 @@ async function deleteConfigItem(id) {
 /* ---- Init ---- */
 async function init() {
   $('login-btn').addEventListener('click', doLogin);
-  $('load').addEventListener('click', loadClips);
+  // Period/Max/Load-all are pure client-side filters (see visibleClips()) — apply
+  // instantly on change, no fetch, no explicit "Load" click needed.
+  $('days').addEventListener('change', render);
+  $('first').addEventListener('input', render);
+  $('allClips').addEventListener('change', () => { $('first').disabled = $('allClips').checked; render(); });
+  $('catalogUpdate').addEventListener('click', refreshCatalog);
   $('dlall').addEventListener('click', downloadAll);
-  $('all').addEventListener('click', () => { clips.forEach(c => { if (c.downloaded && !hidden.has(c.id) && !isIncluded(c.id)) sequence.push(c.id); }); render(); });
+  $('all').addEventListener('click', () => { visibleClips().forEach(c => { if (c.downloaded && !hidden.has(c.id) && !isIncluded(c.id)) sequence.push(c.id); }); render(); });
   $('none').addEventListener('click', () => { sequence = []; render(); });
   $('preview').addEventListener('click', openOverlay);
+  $('previewClose').addEventListener('click', closePreview);
+  $('previewOverlay').addEventListener('click', e => { if (e.target.id === 'previewOverlay') closePreview(); });
+  $('configsToggle').addEventListener('click', openConfigsFlyout);
+  $('configsClose').addEventListener('click', closeConfigsFlyout);
+  $('configsFlyout').querySelector('.flyout-backdrop').addEventListener('click', closeConfigsFlyout);
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    if (!$('previewOverlay').hidden) closePreview();
+    else if (!$('configsFlyout').hidden) closeConfigsFlyout();
+  });
   $('clipSearch').addEventListener('input', render);
   $('configSave').addEventListener('click', saveConfigNow);
   $('configNew').addEventListener('click', newConfig);
@@ -427,6 +617,8 @@ async function init() {
     $(id).addEventListener('change', () => localStorage.setItem('elm.' + id, $(id).checked ? '1' : '0'));
   }
   initDrag();
+  initToggle('filtersToggle', 'controlsBody', 'elm.filtersOpen');
+  initToggle('optionsToggle', 'listToolbarBody', 'elm.optionsOpen');
   $('preview').disabled = !loadedConfigId;
   try {
     const st = await api('/api/status');
@@ -436,8 +628,14 @@ async function init() {
       await loadConfigs();
       // A config saved in a previous session may have since been deleted elsewhere.
       const still = configs.find(c => c.id === loadedConfigId);
-      if (still) $('configName').value = still.name; else setLoadedConfig(null);
+      if (still) { $('configName').value = still.name; setLoadedConfig(still.id); } else setLoadedConfig(null);
     } else showLogin('idle');
   } catch { showLogin('idle'); }
 }
 init();
+
+// Presence heartbeat: lets the CLI dashboard (dashboard.mjs) report "web UI open" as a
+// real connection instead of guessing from recent HTTP activity. Open unconditionally
+// (even on the login screen) for as long as this tab is open — the browser closes it
+// automatically on navigate/close, no explicit cleanup needed.
+new EventSource('/api/ui/presence');

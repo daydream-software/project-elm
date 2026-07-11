@@ -7,9 +7,14 @@ render/cli/.last-clips.json
 render/realclips/
 # Saved reel configurations (local user data)
 render/configs/
+# Local clip catalog (rebuildable from Twitch via the Update button)
+render/catalog.json
 
 # Node
 node_modules/
+
+# Playwright
+.playwright-mcp/
 
 # Logs / temp
 *.log

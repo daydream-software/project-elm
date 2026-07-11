@@ -37,14 +37,9 @@ export const serverRequests = makeCounter();
 export const twitchCalls = makeCounter();
 export const twitchBytes = { total: 0 };
 
-let lastActivityAt = 0;
-
-export function recordServerRequest() { bump(serverRequests); lastActivityAt = Date.now(); }
-export function recordTwitchCall() { bump(twitchCalls); lastActivityAt = Date.now(); }
-export function recordTwitchBytes(n) { twitchBytes.total += n; lastActivityAt = Date.now(); }
+export function recordServerRequest() { bump(serverRequests); }
+export function recordTwitchCall() { bump(twitchCalls); }
+export function recordTwitchBytes(n) { twitchBytes.total += n; }
 
 export function serverRatePerMin() { return ratePerMin(serverRequests); }
 export function twitchRatePerMin() { return ratePerMin(twitchCalls); }
-
-/** True if any server request or twitch call happened within the last `withinMs`. */
-export function isRecentlyActive(withinMs = 3000) { return Date.now() - lastActivityAt < withinMs; }
