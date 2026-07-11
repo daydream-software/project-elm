@@ -20,12 +20,14 @@
     </svg>
     <h1>Project Elm <span class="dim">— Selection</span></h1>
   </div>
+  <span id="status" class="status topbar-status"></span>
   <div class="actions">
     <button id="theme-toggle" class="btn ghost icon-btn" type="button" title="Toggle theme" aria-label="Toggle theme">
       <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.5 6.5 0 0 0 9.8 9.8z"/></svg>
       <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.4 1.4M17.2 17.2L18.6 18.6M18.6 5.4L17.2 6.8M6.8 17.2L5.4 18.6"/></svg>
     </button>
     <button id="configsToggle" class="btn ghost" type="button" disabled>Configurations</button>
+    <button id="configQuickSave" class="btn primary" type="button" disabled>Save configuration</button>
     <button id="preview" class="btn primary" type="button" disabled>Open overlay ↗</button>
   </div>
 </header>
@@ -114,7 +116,6 @@
     <button id="dlall" class="btn ghost" type="button">Download all</button>
     <button id="all" class="btn ghost" type="button">Include all</button>
     <button id="none" class="btn ghost" type="button">Include none</button>
-    <span id="status" class="status"></span>
   </div>
 </section>
 

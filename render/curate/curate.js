@@ -55,14 +55,14 @@ function initToggle(toggleId, bodyId, storageKey) {
 function showLogin(mode) {
   $('login').hidden = false; $('filterOptionsBar').hidden = true; $('grid').innerHTML = '';
   $('sequence').hidden = true; $('catalogBar').hidden = true;
-  closeConfigsFlyout(); $('configsToggle').disabled = true; $('preview').disabled = true;
+  closeConfigsFlyout(); $('configsToggle').disabled = true; $('configQuickSave').disabled = true; $('preview').disabled = true;
   $('login-idle').hidden = mode !== 'idle';
   $('login-code').hidden = mode !== 'code';
   $('login-setup').hidden = mode !== 'setup';
 }
 function showApp() {
   $('login').hidden = true; $('filterOptionsBar').hidden = false;
-  $('catalogBar').hidden = false; $('configsToggle').disabled = false;
+  $('catalogBar').hidden = false; $('configsToggle').disabled = false; $('configQuickSave').disabled = false;
 }
 
 /* ---- Login (device code) ---- */
@@ -530,7 +530,12 @@ function loadConfig(id) {
 
 async function saveConfigNow() {
   const name = $('configName').value.trim();
-  if (!name) { $('status').textContent = '⚠ Name the configuration before saving.'; $('configName').focus(); return; }
+  if (!name) {
+    openConfigsFlyout();
+    $('status').textContent = '⚠ Name the configuration before saving.';
+    $('configName').focus();
+    return;
+  }
   try {
     const saved = await api('/api/configs', {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -541,7 +546,9 @@ async function saveConfigNow() {
     });
     setLoadedConfig(saved.id);
     await loadConfigs();
-    $('status').textContent = `Saved "${saved.name}". Any open overlay for it updates live.`;
+    // Past tense on purpose — this reports what THIS save just did, not an ongoing
+    // autosave. Nothing here saves again until the button is pressed.
+    $('status').textContent = `Saved "${saved.name}" — its open overlay just refreshed to match.`;
   } catch (e) { $('status').textContent = '⚠ ' + e.message; }
 }
 
@@ -599,6 +606,7 @@ async function init() {
   });
   $('clipSearch').addEventListener('input', render);
   $('configSave').addEventListener('click', saveConfigNow);
+  $('configQuickSave').addEventListener('click', saveConfigNow);
   $('configNew').addEventListener('click', newConfig);
   $('configSearch').addEventListener('input', renderConfigList);
   $('theme-toggle').addEventListener('click', () => {
@@ -608,13 +616,13 @@ async function init() {
     localStorage.setItem('elm.theme', next);
   });
   $('order').value = localStorage.getItem(ORDER_KEY) || 'random';
-  $('order').addEventListener('change', () => { localStorage.setItem(ORDER_KEY, $('order').value); renderSequence(); });
+  $('order').addEventListener('change', () => { localStorage.setItem(ORDER_KEY, $('order').value); renderSequence(); updateActions(); });
   $('showHidden').checked = localStorage.getItem('elm.showHidden') === '1';
   $('showHidden').addEventListener('change', () => { localStorage.setItem('elm.showHidden', $('showHidden').checked ? '1' : '0'); render(); });
   for (const id of ['showTitle', 'showChannel', 'showGame']) {
     const saved = localStorage.getItem('elm.' + id);
     if (saved !== null) $(id).checked = saved === '1';
-    $(id).addEventListener('change', () => localStorage.setItem('elm.' + id, $(id).checked ? '1' : '0'));
+    $(id).addEventListener('change', () => { localStorage.setItem('elm.' + id, $(id).checked ? '1' : '0'); updateActions(); });
   }
   initDrag();
   initToggle('filtersToggle', 'controlsBody', 'elm.filtersOpen');

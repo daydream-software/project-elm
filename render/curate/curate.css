@@ -57,6 +57,8 @@ body { margin: 0; min-height: 100vh; display: flex; flex-direction: column;
 .topbar h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
 .topbar h1 .dim { color: var(--muted); font-weight: 500; }
 .actions { display: flex; align-items: center; gap: 8px; }
+.topbar-status { flex: 1; min-width: 0; text-align: right; margin: 0 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---- Buttons ---- */
 .btn { font: inherit; font-weight: 600; padding: 8px 15px; border-radius: var(--radius-sm);
@@ -97,7 +99,6 @@ body { margin: 0; min-height: 100vh; display: flex; flex-direction: column;
 .tab-toggle.active { color: var(--accent); }
 .collapsible-body { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; padding-bottom: 4px; }
 .collapsible-body[hidden] { display: none; }
-.collapsible-body .status { margin-left: auto; }
 .collapsible-chevron { font-size: 10px; transition: transform 150ms ease; }
 .tab-toggle:not(.active) .collapsible-chevron { transform: rotate(-90deg); }
 .field { display: flex; flex-direction: column; gap: 5px; }
