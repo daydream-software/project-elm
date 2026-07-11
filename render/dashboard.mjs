@@ -143,13 +143,13 @@ function overlayClientCount() {
  * a reel" read as distinct facts, not folded into one vague activity pulse. */
 function statusLine(label, count, extra) {
   const on = count > 0;
-  if (on) pulseFrame++;
   const dot = on ? colorize('●', pulseFrame % 2 ? '1;32' : '2;32') : colorize('○', '2');
   const text = on ? extra : (label === 'Web UI' ? 'closed' : 'none connected');
   return `${label.padEnd(12)}${dot} ${text}`;
 }
 
 function buildPanel() {
+  pulseFrame++;   // once per render pass, not per row — keeps every active dot in phase
   const uiCount = state.uiSubscribers.size;
   const overlayCount = overlayClientCount();
 

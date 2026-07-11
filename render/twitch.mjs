@@ -128,6 +128,26 @@ async function helix(pathq, t) {
 }
 export async function me(t) { return (await helix('users', t)).data[0]; }
 
+/** Shared cursor-pagination core: page a Helix `clips?...` query until `pagination.cursor`
+ *  is exhausted, `limit` clips have been collected, or `maxPages` trips as a circuit
+ *  breaker (never hit in practice). onProgress({fetched, page}) fires after each page. */
+async function paginateClips(t, base, { limit = Infinity, maxPages, onProgress = () => {} }) {
+  const clips = [];
+  let cursor = '';
+  for (let page = 0; page < maxPages; page++) {
+    const take = Math.min(100, limit - clips.length);
+    if (take <= 0) break;
+    let q = `${base}&first=${take}`;
+    if (cursor) q += `&after=${encodeURIComponent(cursor)}`;
+    const r = await helix(q, t);
+    clips.push(...(r.data || []));
+    cursor = (r.pagination && r.pagination.cursor) || '';
+    onProgress({ fetched: clips.length, page: page + 1 });
+    if (!cursor) break;
+  }
+  return clips;
+}
+
 /** List clips for the authenticated broadcaster. `first` is a soft cap (Helix maxes a
  *  single page at 100); pass 0/falsy for `first` to follow the `pagination.cursor`
  *  Helix returns until it's exhausted — i.e. literally every clip in the period, not
@@ -141,19 +161,7 @@ export async function listClips({ days = 0, first = 30 } = {}) {
     const ended = new Date(), started = new Date(Date.now() - days * 86_400_000);
     base += `&started_at=${started.toISOString()}&ended_at=${ended.toISOString()}`;
   }
-  const wantAll = !first;
-  const clips = [];
-  let cursor = '';
-  for (let page = 0; page < 200; page++) {   // circuit breaker only — never hit in practice
-    const take = wantAll ? 100 : Math.min(100, first - clips.length);
-    if (take <= 0) break;
-    let q = `${base}&first=${take}`;
-    if (cursor) q += `&after=${encodeURIComponent(cursor)}`;
-    const r = await helix(q, t);
-    clips.push(...(r.data || []));
-    cursor = (r.pagination && r.pagination.cursor) || '';
-    if (!cursor) break;
-  }
+  const clips = await paginateClips(t, base, { limit: first || Infinity, maxPages: 200 });
   clips.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   return { user: u, clips };
 }
@@ -164,17 +172,7 @@ export async function listClips({ days = 0, first = 30 } = {}) {
 export async function listAllClips(onProgress = () => {}) {
   const t = await token();
   const u = await me(t);
-  const clips = [];
-  let cursor = '';
-  for (let page = 0; page < 500; page++) {   // circuit breaker only — never hit in practice
-    let q = `clips?broadcaster_id=${u.id}&first=100`;
-    if (cursor) q += `&after=${encodeURIComponent(cursor)}`;
-    const r = await helix(q, t);
-    clips.push(...(r.data || []));
-    cursor = (r.pagination && r.pagination.cursor) || '';
-    onProgress({ fetched: clips.length, page: page + 1 });
-    if (!cursor) break;
-  }
+  const clips = await paginateClips(t, `clips?broadcaster_id=${u.id}`, { maxPages: 500, onProgress });
   return clips;
 }
 

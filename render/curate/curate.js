@@ -185,12 +185,12 @@ function render() {
 
     const thumbAttrs = isHidden ? '' : ` role="button" tabindex="0" title="${c.downloaded ? 'Click to include / exclude' : 'Click to download'}"`;
 
-    const badgeClass = c.orphaned ? 'orphan' : (c.downloaded ? 'dl' : 'nodl');
-    const badgeText = c.orphaned ? '⚠ Removed from Twitch' : (c.downloaded ? '✓ Downloaded' : 'not downloaded');
+    const badgeClass = c.orphaned ? 'orphan' : c.uncataloged ? 'pending' : (c.downloaded ? 'dl' : 'nodl');
+    const badgeText = c.orphaned ? '⚠ Removed from Twitch' : c.uncataloged ? '◌ Not yet cataloged' : (c.downloaded ? '✓ Downloaded' : 'not downloaded');
     // Twitch's own thumbnail never hard-fails for a deleted clip (see ensureHomemadeThumbnail
-    // above) — so for an orphaned clip with no generated thumbnail yet, kick one off now
-    // rather than waiting for an onerror that will never come.
-    if (c.orphaned && c.downloaded && !/\.thumb\.jpg(\?|$)/.test(c.thumbnail || '')) ensureHomemadeThumbnail(c.id);
+    // above) — so for an orphaned or not-yet-cataloged clip with no generated thumbnail yet,
+    // kick one off now rather than waiting for an onerror that will never come.
+    if ((c.orphaned || c.uncataloged) && c.downloaded && !/\.thumb\.jpg(\?|$)/.test(c.thumbnail || '')) ensureHomemadeThumbnail(c.id);
     card.innerHTML = `
       <div class="thumb"${thumbAttrs}>
         <img loading="lazy" src="${esc(thumb)}" alt="" data-id="${esc(c.id)}" onerror="handleThumbError(this)" />

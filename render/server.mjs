@@ -44,15 +44,17 @@ const ORDERS = {
  * its clips, filtered to what's downloaded right now, in the config's play order. Reads
  * the local catalog only — no live Twitch calls — so a clip deleted on Twitch AFTER
  * being downloaded keeps playing (cached title/game/broadcaster) instead of silently
- * dropping out of the reel. Always recomputed fresh from disk (never cached in memory)
- * so an overlay re-fetching this after an SSE "update" ping sees the current state. */
+ * dropping out of the reel. A downloaded clip with no catalog entry at all (not yet
+ * cataloged — see /api/clips) still plays too, just with blank title/game/broadcaster
+ * until an Update fills them in. Always recomputed fresh from disk (never cached in
+ * memory) so an overlay re-fetching this after an SSE "update" ping sees the current
+ * state. */
 function resolvePlaylist(config) {
   const ord = ORDERS[config.order] || ORDERS.random;
   const seq = config.sequence || [];
   const chosen = seq
     .filter(id => tw.isDownloadedId(id))
-    .map(id => { const e = catalog.getEntry(id); return e ? { id, ...e } : null; })
-    .filter(Boolean);
+    .map(id => ({ id, title: '', game: '', broadcaster: '', duration: 0, views: 0, createdAt: null, ...catalog.getEntry(id) }));
   if (ord.sort) chosen.sort(ord.sort);
   return {
     settings: {
@@ -160,7 +162,7 @@ const server = http.createServer(async (req, res) => {
       const knownIds = new Set(Object.keys(known));
       const uncataloged = tw.listDownloadedIds().filter(id => !knownIds.has(id)).map(id => ({
         id, title: '(not yet cataloged — click Update)', game: '', views: 0, duration: 0, createdAt: null,
-        thumbnail: tw.generatedThumbUrl(id) || '', downloaded: true, orphaned: true,
+        thumbnail: tw.generatedThumbUrl(id) || '', downloaded: true, orphaned: false, uncataloged: true,
       }));
       const combined = [...fromCatalog, ...uncataloged].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
       return send(res, 200, { clips: combined, catalogUpdatedAt: catalog.lastUpdated() });
@@ -174,10 +176,7 @@ const server = http.createServer(async (req, res) => {
       const downloaded_ids = chosen.filter(tw.isDownloaded).map(c => c.id);
       for (const c of chosen) {
         if (!tw.isDownloadedId(c.id)) continue;
-        catalog.upsert(c.id, {
-          title: c.title, game: games[c.game_id] || '', views: c.view_count, duration: c.duration,
-          createdAt: c.created_at, thumbnail: c.thumbnail_url, broadcaster: c.broadcaster_name,
-        });
+        catalog.upsert(c.id, catalog.fromHelixClip(c, games[c.game_id]));
       }
       cfg.configsReferencing(ids).forEach(notify);   // any live overlay using these clips: refresh
       return send(res, 200, { ...result, downloaded_ids });

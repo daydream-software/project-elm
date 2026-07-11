@@ -28,9 +28,11 @@ function migrateLegacySidecars() {
     const full = path.join(dir, f);
     try {
       const m = JSON.parse(fs.readFileSync(full, 'utf8'));
+      // missing:false, not true — we haven't actually checked Twitch yet, so treat the
+      // clip as present until a real refresh() proves otherwise (see refresh() below).
       clips[f.slice(0, -5)] = {
         title: m.title, game: m.game, views: m.views, duration: m.duration,
-        createdAt: m.createdAt, thumbnail: m.thumbnail, broadcaster: m.broadcaster, missing: true,
+        createdAt: m.createdAt, thumbnail: m.thumbnail, broadcaster: m.broadcaster, missing: false,
       };
     } catch { /* unreadable sidecar — nothing worth carrying forward */ }
     fs.unlinkSync(full);
@@ -58,6 +60,16 @@ function save(catalog) {
 export const getAll = () => load().clips;
 export const getEntry = (id) => load().clips[id] || null;
 export const lastUpdated = () => load().updatedAt;
+
+/** The subset of a Helix clip object (or a resolved game name) worth keeping in the
+ *  catalog — the one place this mapping is defined, shared by refresh() and every
+ *  caller that upserts a clip right after downloading it. */
+export function fromHelixClip(clip, gameName) {
+  return {
+    title: clip.title, game: gameName || '', views: clip.view_count, duration: clip.duration,
+    createdAt: clip.created_at, thumbnail: clip.thumbnail_url, broadcaster: clip.broadcaster_name,
+  };
+}
 
 /** Record/refresh one clip's metadata — called right after a successful download so a
  *  clip is in the catalog immediately, without waiting for the next full refresh. */
@@ -90,10 +102,7 @@ export async function refresh(onProgress = () => {}) {
   for (const c of fresh) {
     presentIds.add(c.id);
     if (cat.clips[c.id]) updated++; else added++;
-    cat.clips[c.id] = {
-      title: c.title, game: games[c.game_id] || '', views: c.view_count, duration: c.duration,
-      createdAt: c.created_at, thumbnail: c.thumbnail_url, broadcaster: c.broadcaster_name, missing: false,
-    };
+    cat.clips[c.id] = { ...fromHelixClip(c, games[c.game_id]), missing: false };
   }
   let newlyMissing = 0, dropped = 0;
   for (const id of Object.keys(cat.clips)) {

@@ -60,10 +60,7 @@ try {
     const games = await tw.gameNames(chosen.map(c => c.game_id));
     for (const c of chosen) {
       if (!tw.isDownloadedId(c.id)) continue;
-      catalog.upsert(c.id, {
-        title: c.title, game: games[c.game_id] || '', views: c.view_count, duration: c.duration,
-        createdAt: c.created_at, thumbnail: c.thumbnail_url, broadcaster: c.broadcaster_name,
-      });
+      catalog.upsert(c.id, catalog.fromHelixClip(c, games[c.game_id]));
     }
     const manifest = {
       output: 'reel.mp4', width: 1920, height: 1080, fps: 30,

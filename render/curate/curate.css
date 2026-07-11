@@ -124,6 +124,7 @@ input[type=number] { width: 90px; }
 .badge.dl { color: #7bffcf; }
 .badge.nodl { color: #cbd5e1; }
 .badge.orphan { color: #f59e0b; }
+.badge.pending { color: #7dd3fc; }
 /* Cached thumbnail can 404 once the source clip is gone from Twitch — show a plain
    placeholder instead of a broken-image icon. */
 .thumb-broken img { visibility: hidden; }
