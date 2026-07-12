@@ -76,6 +76,24 @@ body { margin: 0; min-height: 100vh; display: flex; flex-direction: column;
 [data-theme="light"] .i-sun { display: inline; }
 [data-theme="light"] .i-moon { display: none; }
 
+/* ---- Config quick-switch (topbar): current name + unsaved dot, dropdown to any saved
+   config. Full manage stays in the flyout — "Manage all configurations…" opens it. ---- */
+.cfg-switch { position: relative; }
+.cfg-btn { display: flex; align-items: center; gap: 7px; }
+.cfg-dot { width: 6px; height: 6px; border-radius: 50%; background: #f59e0b; display: none; }
+.cfg-dot.show { display: inline-block; }
+.cfg-menu { position: absolute; top: calc(100% + 6px); left: 0; width: 240px; padding: 6px;
+  border-radius: var(--radius-sm); background: var(--panel); border: 1px solid var(--line);
+  box-shadow: var(--shadow); z-index: 20; }
+.cfg-menu[hidden] { display: none; }
+/* Cap the dropdown at ~10 rows with a scrollbar; the manage link stays outside the scroll area. */
+.cfg-menu-list { max-height: 305px; overflow-y: auto; }
+.cfg-item { display: block; width: 100%; text-align: left; font: inherit; font-size: 13px; padding: 8px 10px;
+  border-radius: 8px; border: none; background: none; color: var(--text); cursor: pointer; }
+.cfg-item:hover { background: var(--panel-2); }
+.cfg-item.current { color: var(--accent); font-weight: 600; }
+.cfg-menu hr { border: none; border-top: 1px solid var(--line-soft); margin: 6px 2px; }
+
 /* ---- Panels / sections ---- */
 .panel { padding: 28px 20px; margin: 0 12px; }
 .panel p { margin: 0 0 10px; }
@@ -85,39 +103,48 @@ body { margin: 0; min-height: 100vh; display: flex; flex-direction: column;
 #login a { color: var(--accent-hi); }
 #login-usercode { font-size: 22px; letter-spacing: 3px; color: var(--accent); }
 
-.controls-merged[hidden] { display: none; }
-.controls-merged {
-  display: flex; flex-direction: column; gap: 12px; padding: 8px 18px;
+.filters[hidden] { display: none; }
+.filters {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; padding: 12px 18px;
   margin: 0 12px 4px; border-radius: var(--radius); background: var(--panel);
   border: 1px solid var(--line); box-shadow: var(--shadow);
 }
-.tabs-head { display: flex; gap: 4px; }
-.tab-toggle { display: flex; align-items: center; gap: 6px; padding: 8px 4px; border: none; background: none;
-  font: inherit; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.09em;
-  color: var(--muted); cursor: pointer; }
-.tab-toggle:hover { color: var(--text); }
-.tab-toggle.active { color: var(--accent); }
-.collapsible-body { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; padding-bottom: 4px; }
-.collapsible-body[hidden] { display: none; }
-.collapsible-chevron { font-size: 10px; transition: transform 150ms ease; }
-.tab-toggle:not(.active) .collapsible-chevron { transform: rotate(-90deg); }
 .field { display: flex; flex-direction: column; gap: 5px; }
 .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
-.field input, .field select { font: inherit; padding: 7px 10px; border-radius: var(--radius-sm);
-  border: 1px solid var(--line); background: var(--panel-2); color: var(--text); }
-.field input:focus, .field select:focus { outline: none; border-color: var(--accent); }
+/* Explicit height (not just matching padding) — a bare <select> and <input> render at a
+   couple px apart natively even with identical padding/border/font, which threw off the
+   label alignment across the row once the .chk-box checkbox wrapper below had to pick one
+   height to match. */
+.field input:not([type=checkbox]), .field select { font: inherit; height: 36px; padding: 0 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--text); box-sizing: border-box; }
+.field input:not([type=checkbox]):focus, .field select:focus { outline: none; border-color: var(--accent); }
 input[type=number] { width: 90px; }
+/* Label-above checkbox — matches the Period/Max/Search fields it sits next to, instead
+   of the inline checkbox+label used for the on-overlay toggles (a different, already
+   self-contained group where that inline form reads fine). .chk-box is the same height
+   as a .field select/input (36px) so the row's shared bottom-alignment (.filters is
+   align-items: flex-end) lands the LABELS at the same height too, not just the controls —
+   a plain checkbox is much shorter than a select, so without this the whole field-chk
+   column is shorter and its label sits visibly lower than its siblings'. */
+.field-chk .chk-box { height: 36px; display: flex; align-items: center; }
+.field-chk input[type=checkbox] { width: 16px; height: 16px; margin: 0; cursor: pointer; }
 .chk { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--muted); align-self: center; }
+input[type=checkbox] { accent-color: var(--accent); }
+input[type=checkbox]:disabled { cursor: not-allowed; opacity: 0.5; }
 .status { color: var(--muted); font-variant-numeric: tabular-nums; }
 
 /* Vertical divider between the reel-shape controls and the bulk actions in #listToolbar */
 .toolbar-sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 2px; }
 
+/* ---- Body layout: clip grid + persistent reel panel side by side ---- */
+.body { display: flex; align-items: flex-start; gap: 14px; margin: 0 12px; }
+.body .grid { flex: 1 1 auto; min-width: 0; margin: 0; padding: 16px 0; }
+
 /* ---- Grid / cards (glass) ---- */
 .grid { flex: 1 0 auto; display: grid; gap: 14px; padding: 16px 12px; align-content: start; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
   box-shadow: var(--shadow); backdrop-filter: var(--card-blur); -webkit-backdrop-filter: var(--card-blur);
-  transition: border-color .15s; }
+  transition: border-color .15s; position: relative; }
 .card.selected { border-color: var(--brand-500); box-shadow: 0 0 0 1px var(--brand-500), var(--shadow); }
 .thumb { position: relative; aspect-ratio: 16/9; background: #000; cursor: pointer; }
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -133,35 +160,46 @@ input[type=number] { width: 90px; }
 .dur { position: absolute; bottom: 8px; right: 8px; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: var(--pill); background: rgba(2, 6, 23, 0.85); color: #fff; }
 .card-body { padding: 10px 12px; }
 .card-title { font-weight: 600; font-size: 13px; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.5em; }
-.card-meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
-.card-foot { display: flex; align-items: center; gap: 6px; padding: 9px 12px; border-top: 1px solid var(--line-soft); }
-.card-foot .dl-one { padding: 5px 12px; font-size: 13px; }
-/* Delete download (frees the local .mp4; reversible) — foot, right-aligned, distinct from Hide */
-.del-dl { margin-left: auto; width: 28px; height: 28px; display: grid; place-items: center; padding: 0;
-  font-size: 14px; line-height: 1; border: 1px solid transparent; border-radius: var(--radius-sm);
-  background: transparent; color: var(--muted); cursor: pointer; opacity: 0.7;
-  transition: background .15s, color .15s, border-color .15s, opacity .15s; }
-.del-dl:hover { opacity: 1; background: rgba(220, 38, 38, 0.12); color: #dc2626; border-color: rgba(220, 38, 38, 0.4); }
+.card-meta { color: var(--muted); font-size: 12px; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .empty { color: var(--muted); padding: 40px 20px; text-align: center; grid-column: 1 / -1; }
 
-/* Play / preview control (corner of the thumbnail) */
+/* Play / preview control (corner of the thumbnail) — unchanged, stays a direct 1-click
+   action even after the redesign below (only Hide/Delete moved into the ⋯ menu). */
 .play-btn { position: absolute; bottom: 8px; left: 8px; width: 26px; height: 26px; display: grid; place-items: center;
   font-size: 11px; line-height: 1; border: none; border-radius: var(--pill); cursor: pointer;
   background: rgba(2, 6, 23, 0.72); color: #fff; opacity: 0; transition: opacity .15s, background .15s, transform .15s; }
 .card:hover .play-btn, .thumb:focus-within .play-btn, .play-btn:focus-visible { opacity: 1; }
 .play-btn:hover { background: var(--brand-600); transform: scale(1.08); }
 
-/* Hide control (corner of the thumbnail) + hidden cards */
-.hide-btn { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; display: grid; place-items: center;
-  font-size: 12px; line-height: 1; border: none; border-radius: var(--pill); cursor: pointer;
+/* Primary action (Add to reel / Download / Unhide) — one big centered hover CTA,
+   replaces the old always-visible foot checkbox/download/unhide row. */
+.primary-cta { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity .12s; pointer-events: none; }
+.card:hover .primary-cta, .card:focus-within .primary-cta { opacity: 1; }
+.primary-cta button { pointer-events: auto; font: inherit; font-weight: 700; font-size: 12px; padding: 7px 14px;
+  border-radius: var(--pill); border: none; cursor: pointer; background: rgba(2, 6, 23, 0.82); color: #fff;
+  backdrop-filter: blur(3px); }
+.primary-cta button.in { background: var(--brand-600); }
+
+/* Secondary actions (Hide, Delete download) — rare/destructive, tucked behind ⋯ so
+   they don't compete with Preview/Add-to-reel for attention. */
+.kebab { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; display: grid; place-items: center;
+  border: none; border-radius: var(--pill); cursor: pointer; font-size: 13px; line-height: 1;
   background: rgba(2, 6, 23, 0.72); color: #fff; opacity: 0; transition: opacity .15s, background .15s; }
-.card:hover .hide-btn, .thumb:focus-within .hide-btn, .hide-btn:focus-visible { opacity: 1; }
-.hide-btn:hover { background: #dc2626; }
+.card:hover .kebab, .thumb:focus-within .kebab, .kebab.open { opacity: 1; }
+.kebab:hover { background: var(--brand-600); }
+.kebab-menu { position: absolute; top: 36px; right: 8px; width: 180px; z-index: 5; padding: 4px;
+  border-radius: var(--radius-sm); background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow); }
+.kebab-menu[hidden] { display: none; }
+.kebab-menu button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; font: inherit;
+  font-size: 12.5px; padding: 7px 9px; border: none; background: none; color: var(--text); border-radius: 7px; cursor: pointer; }
+.kebab-menu button:hover { background: var(--panel-2); }
+.kebab-menu button.danger:hover { background: rgba(220, 38, 38, 0.12); color: #dc2626; }
+
 .card.is-hidden { opacity: 0.58; }
 .card.is-hidden:hover { opacity: 0.85; }
 .card.is-hidden .thumb { cursor: default; }
 .card.is-hidden .thumb img { filter: grayscale(0.6); }
-.card-foot .unhide { padding: 5px 12px; font-size: 13px; }
 
 .field-search input { width: 220px; }
 
@@ -190,7 +228,7 @@ input[type=number] { width: 90px; }
 .flyout-panel { position: absolute; top: 0; right: 0; bottom: 0; width: min(400px, 92vw);
   display: flex; flex-direction: column; padding: 18px; gap: 10px; box-sizing: border-box;
   background: var(--panel); border-left: 1px solid var(--line); box-shadow: var(--shadow);
-  transform: translateX(100%); transition: transform 200ms ease; }
+  transform: translateX(100%); transition: transform 200ms ease; overflow: hidden; }
 .flyout.open .flyout-panel { transform: translateX(0); }
 .flyout-head { display: flex; align-items: center; justify-content: space-between; }
 .configs-head { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -199,7 +237,7 @@ input[type=number] { width: 90px; }
 #configSearch { width: 100%; box-sizing: border-box; font: inherit; padding: 7px 10px; border-radius: var(--radius-sm);
   border: 1px solid var(--line); background: var(--panel-2); color: var(--text); }
 .configs-head input:focus, #configSearch:focus { outline: none; border-color: var(--accent); }
-.config-list { display: flex; flex-direction: column; gap: 6px; flex: 1 1 auto; overflow-y: auto; }
+.config-list { display: flex; flex-direction: column; gap: 6px; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .config-empty { color: var(--muted); font-size: 13px; padding: 10px 4px; }
 .config-item { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px;
   border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-2); }
@@ -215,27 +253,56 @@ input[type=number] { width: 90px; }
   transition: background .15s, color .15s, border-color .15s, opacity .15s; }
 .config-item-actions .del:hover { opacity: 1; background: rgba(220, 38, 38, 0.12); color: #dc2626; border-color: rgba(220, 38, 38, 0.4); }
 
-/* ---- Custom sequence strip (drag & drop) ---- */
-.sequence { margin: 0 12px 4px; padding: 12px 16px; border-radius: var(--radius);
-  background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow); }
-.seq-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+/* ---- Your reel: persistent panel (always visible — not gated behind Order = Custom
+   anymore, which is the whole point: previously there was no way to see your included
+   clips as a list in any other order mode). ---- */
+.reel { flex: 0 0 300px; align-self: flex-start; margin: 16px 0; border-radius: var(--radius);
+  background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow);
+  backdrop-filter: var(--card-blur); -webkit-backdrop-filter: var(--card-blur);
+  display: flex; flex-direction: column; max-height: calc(100vh - 32px); }
+.reel[hidden] { display: none; }
+/* Below ~900px there isn't room for the grid (240px column floor) and the fixed 300px
+   reel panel side by side without overflowing/overlapping — stack the reel below the
+   grid instead of forcing a horizontal squeeze neither side can actually satisfy. */
+@media (max-width: 900px) {
+  .body { flex-direction: column; }
+  .reel { flex: 0 0 auto; width: 100%; max-height: 50vh; }
+}
+.reel-head { padding: 14px 16px 10px; border-bottom: 1px solid var(--line-soft); }
+.reel-head-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.reel-stats { font-size: 12.5px; color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.reel-order.field { margin-top: 10px; }
+.reel-onscreen { padding: 10px 16px; border-bottom: 1px solid var(--line-soft); display: flex; flex-wrap: wrap; gap: 6px 12px; }
+.reel-onscreen-label { flex-basis: 100%; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+.reel-onscreen .chk { font-size: 12.5px; }
+.reel-foot { padding: 10px 16px; border-top: 1px solid var(--line-soft); }
+.manage-link { display: block; width: 100%; text-align: center; font: inherit; font-size: 11.5px;
+  color: var(--muted); background: none; border: none; cursor: pointer; padding: 4px; }
+.manage-link:hover { color: var(--accent); }
+
+/* ---- Reel list (drag & drop, single column now that it lives in a narrow side panel) ---- */
+.seq-head { padding: 10px 16px 0; }
 .seq-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.09em; color: var(--accent); }
 .seq-hint { font-size: 12px; color: var(--muted); }
-.seq-list { display: flex; flex-wrap: wrap; gap: 8px; padding-bottom: 4px; min-height: 56px; max-height: 46vh; overflow-y: auto; }
+.seq-list { flex: 1 1 auto; display: flex; flex-direction: column; gap: 8px; padding: 10px 16px; min-height: 56px; overflow-y: auto; }
 .seq-empty { color: var(--muted); font-size: 13px; padding: 14px 4px; }
-.seq-tile { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; width: 200px; padding: 6px 8px;
+.seq-tile { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px;
   border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-2);
   cursor: grab; user-select: none; transition: border-color .15s, box-shadow .15s; }
+.seq-tile:not([draggable="true"]) { cursor: default; }
 .seq-tile:hover { border-color: var(--accent); }
 .seq-tile.dragging { opacity: 0.4; cursor: grabbing; }
-/* Drop indicator: an inset bar (no layout shift → no flicker). */
-.seq-tile.drop-before { box-shadow: inset 3px 0 0 0 var(--accent); }
-.seq-list.drop-at-end .seq-tile:last-child { box-shadow: inset -3px 0 0 0 var(--accent); }
+/* Drop indicator: an inset bar (no layout shift → no flicker). Horizontal now — the list
+   is a single vertical column, not a wrapping horizontal strip. */
+.seq-tile.drop-before { box-shadow: inset 0 3px 0 0 var(--accent); }
+.seq-list.drop-at-end .seq-tile:last-child { box-shadow: inset 0 -3px 0 0 var(--accent); }
 .seq-grip { color: var(--muted); font-size: 14px; line-height: 1; cursor: grab; flex: none; }
+.seq-grip.static { opacity: 0.35; cursor: default; }
 .seq-num { flex: none; min-width: 18px; height: 18px; padding: 0 4px; display: grid; place-items: center;
   font-size: 11px; font-weight: 700; border-radius: var(--pill); background: var(--brand-600); color: #fff; }
 .seq-thumb { flex: none; width: 44px; height: 25px; object-fit: cover; border-radius: 5px; background: #000; }
 .seq-title { flex: 1 1 auto; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.seq-dur { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .seq-remove { flex: none; width: 20px; height: 20px; display: grid; place-items: center; padding: 0;
   font-size: 11px; line-height: 1; border: none; border-radius: var(--pill); cursor: pointer;
   background: transparent; color: var(--muted); transition: background .15s, color .15s; }

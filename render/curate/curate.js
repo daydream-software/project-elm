@@ -32,37 +32,19 @@ const fmtDur = (s) => { s = Math.round(s || 0); const m = Math.floor(s / 60); re
 const fmtViews = (n) => Number(n || 0).toLocaleString('en-US');
 const fmtDate = (iso) => { try { return new Date(iso).toLocaleDateString('en-US'); } catch { return ''; } };
 
-/* ---- Collapsible sections (Filters, Options) — remembers open/closed per section. ---- */
-// Filters/Options tabs: each toggle shows/hides its own body independently. Collapsed
-// by default (localStorage holds '1' only once a tab has been explicitly opened).
-function initToggle(toggleId, bodyId, storageKey) {
-  const toggle = $(toggleId);
-  const body = $(bodyId);
-  const open = localStorage.getItem(storageKey) === '1';
-  body.hidden = !open;
-  toggle.setAttribute('aria-expanded', String(open));
-  toggle.classList.toggle('active', open);
-  toggle.addEventListener('click', () => {
-    const nowOpen = body.hidden;   // currently hidden → this click opens it
-    body.hidden = !nowOpen;
-    toggle.setAttribute('aria-expanded', String(nowOpen));
-    toggle.classList.toggle('active', nowOpen);
-    try { localStorage.setItem(storageKey, nowOpen ? '1' : '0'); } catch {}
-  });
-}
-
 /* ---- Views ---- */
 function showLogin(mode) {
   $('login').hidden = false; $('filterOptionsBar').hidden = true; $('grid').innerHTML = '';
   $('sequence').hidden = true; $('catalogBar').hidden = true;
-  closeConfigsFlyout(); $('configsToggle').disabled = true; $('configQuickSave').disabled = true; $('preview').disabled = true;
+  closeConfigsFlyout(); $('cfgSwitchBtn').disabled = true; $('configQuickSave').disabled = true; $('preview').disabled = true;
   $('login-idle').hidden = mode !== 'idle';
   $('login-code').hidden = mode !== 'code';
   $('login-setup').hidden = mode !== 'setup';
 }
 function showApp() {
   $('login').hidden = true; $('filterOptionsBar').hidden = false;
-  $('catalogBar').hidden = false; $('configsToggle').disabled = false; $('configQuickSave').disabled = false;
+  $('catalogBar').hidden = false; $('sequence').hidden = false;
+  $('cfgSwitchBtn').disabled = false; $('configQuickSave').disabled = false;
 }
 
 /* ---- Login (device code) ---- */
@@ -155,6 +137,17 @@ function visibleClips() {
     && (!q || (c.title || '').toLowerCase().includes(q) || (c.game || '').toLowerCase().includes(q)));
 }
 
+// Shared by both dropdown openers (a card's ⋯ menu, the config-switch menu) and by the
+// outside-click/Escape closers below — closing through ONE function means opening
+// either dropdown always closes the other (they used to each close only their own
+// kind, so a kebab menu and the config-switch menu could both stay open at once).
+function closeAllMenus() {
+  document.querySelectorAll('.kebab-menu').forEach(m => m.hidden = true);
+  document.querySelectorAll('.kebab').forEach(k => k.classList.remove('open'));
+  $('cfgMenu').hidden = true;
+  $('cfgSwitchBtn').setAttribute('aria-expanded', 'false');
+}
+
 function render() {
   const grid = $('grid');
   const q = $('clipSearch').value.trim().toLowerCase();
@@ -168,20 +161,25 @@ function render() {
     card.className = 'card' + (included ? ' selected' : '') + (isHidden ? ' is-hidden' : '');
     card.dataset.id = c.id;
 
-    // Foot: hidden → Unhide; downloaded → Include + Delete download; else → Download.
+    // Primary action (big hover CTA over the thumbnail): hidden → Unhide; downloaded →
+    // Add/remove from the reel; else → Download. Secondary actions (Hide, Delete
+    // download — rare and/or destructive) live behind the ⋯ menu instead of competing
+    // for space with Preview and the primary CTA.
     const delTitle = c.orphaned
       ? 'Delete download — this clip no longer exists on Twitch, so this is FINAL (no re-download possible)'
       : 'Delete download — frees the file; you can re-download';
-    const foot = isHidden
-      ? `<button class="btn ghost unhide" type="button">↩ Unhide</button>`
-      : c.downloaded
-        ? `<label><input type="checkbox" ${included ? 'checked' : ''} /> Include</label>
-           <button class="del-dl" type="button" title="${esc(delTitle)}" aria-label="Delete download">🗑</button>`
-        : `<button class="btn ghost dl-one" type="button">⬇ Download</button>`;
-
-    // Corner control: hide (only on non-hidden cards — hidden cards unhide from the foot).
-    const corner = isHidden ? '' :
-      `<button class="hide-btn" type="button" title="Hide — never feature" aria-label="Hide clip">✕</button>`;
+    const ctaLabel = isHidden ? '↩ Unhide' : c.downloaded ? (included ? '✓ In reel' : '+ Add to reel') : '⬇ Download';
+    const ctaClass = included ? ' in' : '';
+    // aria-pressed only makes sense for the include on/off toggle (downloaded, not
+    // hidden) — Download/Unhide are one-shot actions, not a persistent toggle state.
+    const ctaIsToggle = !isHidden && c.downloaded;
+    const ctaAria = ctaIsToggle ? ` aria-pressed="${included}"` : '';
+    const kebab = isHidden ? '' : `
+      <button class="kebab" type="button" title="More" aria-label="More actions">⋯</button>
+      <div class="kebab-menu" hidden>
+        <button class="k-hide" type="button">✕ Hide</button>
+        ${c.downloaded ? `<button class="k-del danger" type="button" title="${esc(delTitle)}">🗑 Delete download</button>` : ''}
+      </div>`;
 
     const thumbAttrs = isHidden ? '' : ` role="button" tabindex="0" title="${c.downloaded ? 'Click to include / exclude' : 'Click to download'}"`;
 
@@ -197,27 +195,33 @@ function render() {
         <span class="badge ${badgeClass}">${badgeText}</span>
         <span class="dur">${fmtDur(c.duration)}</span>
         <button class="play-btn" type="button" title="Preview clip" aria-label="Preview clip">▶</button>
-        ${corner}
+        <div class="primary-cta"><button class="cta-btn${ctaClass}" type="button"${ctaAria}>${ctaLabel}</button></div>
+        ${kebab}
       </div>
       <div class="card-body">
         <div class="card-title">${esc(c.title || '(untitled)')}</div>
         <div class="card-meta">${c.game ? esc(c.game) + ' · ' : ''}👁 ${fmtViews(c.views)} · ${fmtDate(c.createdAt)}</div>
-      </div>
-      <div class="card-foot">${foot}</div>`;
+      </div>`;
 
     card.querySelector('.play-btn').addEventListener('click', e => { e.stopPropagation(); openPreview(c); });
 
-    if (isHidden) {
-      card.querySelector('.unhide').addEventListener('click', () => toggleHidden(c.id));
-    } else {
-      card.querySelector('.hide-btn').addEventListener('click', e => { e.stopPropagation(); toggleHidden(c.id); });
-      const act = () => c.downloaded ? setInclude(c.id, !isIncluded(c.id)) : downloadOne(c.id);
+    const act = isHidden ? () => toggleHidden(c.id)
+      : c.downloaded ? () => setInclude(c.id, !isIncluded(c.id)) : () => downloadOne(c.id);
+    card.querySelector('.cta-btn').addEventListener('click', e => { e.stopPropagation(); act(); });
+
+    if (!isHidden) {
       card.querySelector('.thumb').addEventListener('click', act);
       card.querySelector('.thumb').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); act(); } });
-      if (c.downloaded) {
-        card.querySelector('input').addEventListener('change', e => setInclude(c.id, e.target.checked));
-        card.querySelector('.del-dl').addEventListener('click', e => { e.stopPropagation(); deleteDownload(c.id); });
-      } else card.querySelector('.dl-one').addEventListener('click', () => downloadOne(c.id));
+      const keb = card.querySelector('.kebab'), menu = card.querySelector('.kebab-menu');
+      keb.addEventListener('click', e => {
+        e.stopPropagation();
+        const wasOpen = !menu.hidden;
+        closeAllMenus();
+        if (!wasOpen) { menu.hidden = false; keb.classList.add('open'); }
+      });
+      menu.querySelector('.k-hide').addEventListener('click', e => { e.stopPropagation(); menu.hidden = true; toggleHidden(c.id); });
+      const del = menu.querySelector('.k-del');
+      if (del) del.addEventListener('click', e => { e.stopPropagation(); menu.hidden = true; deleteDownload(c.id); });
     }
     grid.appendChild(card);
   }
@@ -231,7 +235,8 @@ function setInclude(id, on) {
   const card = $('grid').querySelector(`.card[data-id="${id}"]`);
   if (card) {
     card.classList.toggle('selected', on);
-    const cb = card.querySelector('input[type=checkbox]'); if (cb) cb.checked = on;
+    const cta = card.querySelector('.cta-btn');
+    if (cta) { cta.textContent = on ? '✓ In reel' : '+ Add to reel'; cta.classList.toggle('in', on); cta.setAttribute('aria-pressed', String(on)); }
   }
   saveSel();
   renderSequence();
@@ -252,57 +257,88 @@ function toggleHidden(id) {
 function updateActions() {
   saveSel();
   const dl = clips.filter(c => c.downloaded).length;
-  const inc = clips.filter(c => c.downloaded && isIncluded(c.id) && !hidden.has(c.id)).length;
   const hid = clips.filter(c => hidden.has(c.id)).length;
   const orph = clips.filter(c => c.orphaned).length;
-  $('status').textContent = `${inc} included · ${dl}/${clips.length} downloaded${hid ? ` · ${hid} hidden` : ''}${orph ? ` · ${orph} removed from Twitch` : ''}`;
+  // "Included" isn't reported here anymore — the reel panel's count/duration is now the
+  // single place that answers "what have I built", instead of duplicating it.
+  $('status').textContent = `${dl}/${clips.length} downloaded${hid ? ` · ${hid} hidden` : ''}${orph ? ` · ${orph} removed from Twitch` : ''}`;
+  refreshCfgDirty();
 }
 
-/* ---- Custom sequence (drag & drop) ---- */
+// Channel/Game are sub-parts of the title-card lower third, not independent overlay
+// elements — disable (don't clear) them while Title card is off, so their value survives
+// for whenever it's turned back on.
+function syncOnscreenToggles() {
+  const on = $('showTitle').checked;
+  $('showChannel').disabled = !on;
+  $('showGame').disabled = !on;
+}
+
+// Order-mode field/direction metadata, fetched from /api/status (server.mjs's
+// ORDER_FIELDS is the single source of truth) — populated in init(). Building the
+// comparator from plain {field, dir} data here instead of hand-copying per-mode
+// comparator functions means the actual sort RULE only lives server-side; this stays
+// in sync automatically instead of needing a matching edit in two files.
+let ORDER_FIELDS = {};
+function buildComparator(mode) {
+  const f = ORDER_FIELDS[mode];
+  if (!f) return null;
+  return f.isDate
+    ? (a, b) => f.dir * (new Date(a[f.field]) - new Date(b[f.field]))
+    : (a, b) => f.dir * (a[f.field] - b[f.field]);
+}
+
+/* ---- Your reel: always visible (previously this only existed when Order = Custom, so
+   there was no way to see your included clips as a list in Random/Views/Recent/Oldest). ---- */
 function renderSequence() {
-  const wrap = $('sequence');
   const custom = $('order').value === 'custom';
-  wrap.hidden = !(custom && !$('filterOptionsBar').hidden);
-  if (wrap.hidden) return;
+  // Random genuinely has no fixed play order — the overlay reshuffles every loop — so
+  // the panel below shows clips unsorted and unnumbered rather than implying an order
+  // that will never actually play out that way.
+  const isRandom = $('order').value === 'random';
+  let items = sequence.map(id => clips.find(c => c.id === id)).filter(c => c && c.downloaded && !hidden.has(c.id));
+  if (!custom && !isRandom) {
+    const cmp = buildComparator($('order').value);
+    if (cmp) items = items.slice().sort(cmp);
+  }
+  const totalDur = items.reduce((s, c) => s + (c.duration || 0), 0);
+  $('reelStats').textContent = items.length
+    ? `${items.length} clip${items.length === 1 ? '' : 's'} · ${fmtDur(totalDur)} total`
+    : 'No clips included yet';
+  $('seqHint').textContent = custom
+    ? 'drag the tiles to set the play order'
+    : isRandom
+      ? 'reshuffled every loop — order below isn\'t the play order'
+      : 'switch Order to Custom to drag-reorder';
+
   const list = $('seq-list');
-  const items = sequence.map(id => clips.find(c => c.id === id)).filter(c => c && c.downloaded && !hidden.has(c.id));
-  list.innerHTML = items.length ? '' : '<div class="seq-empty">Include clips below, then drag the tiles to set the play order.</div>';
+  list.innerHTML = items.length ? '' : '<div class="seq-empty">Include clips below — they\'ll show up here.</div>';
   items.forEach((c, i) => {
     const thumb = (c.thumbnail || '').replace('{width}', '160').replace('{height}', '90');
     const tile = document.createElement('div');
     tile.className = 'seq-tile';
-    tile.draggable = true;
+    tile.draggable = custom;
     tile.dataset.id = c.id;
     tile.innerHTML = `
-      <span class="seq-grip" aria-hidden="true">⠿</span>
-      <span class="seq-num">${i + 1}</span>
+      <span class="seq-grip${custom ? '' : ' static'}" aria-hidden="true">⠿</span>
+      <span class="seq-num"${isRandom ? ' title="Shuffled — not a fixed position"' : ''}>${isRandom ? '🔀' : i + 1}</span>
       <img class="seq-thumb" src="${esc(thumb)}" alt="" />
       <span class="seq-title">${esc(c.title || '(untitled)')}</span>
-      <button class="seq-remove" type="button" title="Remove from sequence" aria-label="Remove from sequence">✕</button>`;
+      <span class="seq-dur">${fmtDur(c.duration)}</span>
+      <button class="seq-remove" type="button" title="Remove from reel" aria-label="Remove from reel">✕</button>`;
     tile.querySelector('.seq-remove').addEventListener('click', () => setInclude(c.id, false));
     list.appendChild(tile);
   });
 }
 
-// Wrap-aware, row-first insertion point → the tile the drop should land BEFORE (null =
-// append). Wide-and-short tiles make a naive nearest-centre metric jump to the row below
-// (the vertical neighbour is closer than the horizontal one), so we pick the pointer's
-// ROW first, then the first tile in it whose centre is right of the pointer. The strip
-// wraps to multiple rows so a 15–20 clip reel stays fully visible — native HTML5 DnD
-// cannot autoscroll a container.
-function getDragAfterElement(container, x, y) {
+// Single-column list (the reel is a narrow side panel, not a wrapping multi-row strip) —
+// insertion point is just the first tile whose vertical centre is past the pointer.
+function getDragAfterElement(container, y) {
   const tiles = [...container.querySelectorAll('.seq-tile:not(.dragging)')];
-  if (!tiles.length) return null;
-  const box = new Map(tiles.map(t => [t, t.getBoundingClientRect()]));
-  const tops = [...new Set(tiles.map(t => Math.round(box.get(t).top)))].sort((a, b) => a - b);
-  const lastBox = box.get(tiles[tiles.length - 1]);
-  if (y > lastBox.top + lastBox.height) return null;               // below everything → append
-  let rowTop = tops[0];
-  for (const t of tops) if (y >= t) rowTop = t;                    // row containing / just above the pointer
-  const row = tiles.filter(t => Math.round(box.get(t).top) === rowTop);
-  for (const t of row) if (x < box.get(t).left + box.get(t).width / 2) return t;   // before first tile past x
-  const next = tops[tops.indexOf(rowTop) + 1];                     // past the row → first tile of next row
-  return next == null ? null : tiles.find(t => Math.round(box.get(t).top) === next);
+  return tiles.find(t => {
+    const box = t.getBoundingClientRect();
+    return y < box.top + box.height / 2;
+  }) || null;
 }
 
 let dragId = null;   // id of the tile currently being dragged
@@ -344,7 +380,7 @@ function initDrag() {
     if (!dragId) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    const after = getDragAfterElement(list, e.clientX, e.clientY);
+    const after = getDragAfterElement(list, e.clientY);
     clearDropMarker(list);
     if (after) after.classList.add('drop-before');
     else list.classList.add('drop-at-end');
@@ -475,7 +511,24 @@ function setLoadedConfig(id) {
   try { id ? localStorage.setItem(LOADED_KEY, id) : localStorage.removeItem(LOADED_KEY); } catch {}
   $('preview').disabled = !id;
   const c = id && configs.find(x => x.id === id);
-  $('configsToggle').textContent = c ? `Configurations: ${c.name}` : 'Configurations';
+  $('cfgSwitchName').textContent = c ? c.name : 'New configuration';
+  renderCfgMenu();
+}
+
+// Unsaved-changes dot on the topbar switch: dirty if a loaded config's live state
+// (sequence/order/on-overlay toggles) no longer matches what was last loaded/saved, or
+// if there's no loaded config yet but the reel isn't empty (a new, never-saved draft).
+let savedSnapshot = null;
+// Guards against a startup race: loadClips() (fired without awaiting in init()) can
+// resolve and trigger a dirty check before init() has finished resolving which config
+// is loaded and setting savedSnapshot — without this guard that reads as "dirty"
+// against a not-yet-set null snapshot and flashes the dot for an unedited config.
+let configsReady = false;
+const snapshotNow = () => JSON.stringify([sequence, $('order').value, $('showTitle').checked, $('showChannel').checked, $('showGame').checked]);
+function refreshCfgDirty() {
+  if (!configsReady) return;
+  const dirty = loadedConfigId ? snapshotNow() !== savedSnapshot : sequence.length > 0;
+  $('cfgDot').classList.toggle('show', dirty);
 }
 
 async function loadConfigs() {
@@ -483,7 +536,16 @@ async function loadConfigs() {
     const data = await api('/api/configs');
     configs = data.configs;
     renderConfigList();
+    renderCfgMenu();
   } catch (e) { $('status').textContent = '⚠ ' + e.message; }
+}
+
+function renderCfgMenu() {
+  const list = $('cfgMenuList');
+  list.innerHTML = configs.length
+    ? configs.map(c => `<button class="cfg-item${c.id === loadedConfigId ? ' current' : ''}" type="button" data-id="${esc(c.id)}">${esc(c.name)}</button>`).join('')
+    : '<div class="config-empty">No saved configurations yet.</div>';
+  list.querySelectorAll('.cfg-item').forEach(btn => btn.addEventListener('click', () => { $('cfgMenu').hidden = true; loadConfig(btn.dataset.id); }));
 }
 
 function renderConfigList() {
@@ -521,8 +583,16 @@ function loadConfig(id) {
   $('showTitle').checked = c.showTitle !== false;
   $('showChannel').checked = c.showBroadcaster !== false;
   $('showGame').checked = c.showGame !== false;
+  // Setting .checked directly doesn't fire 'change', so persist these the same way the
+  // change handler does — otherwise a reload restores stale toggle values from
+  // localStorage instead of this config's, which then reads as a false "unsaved change".
+  localStorage.setItem('elm.showTitle', $('showTitle').checked ? '1' : '0');
+  localStorage.setItem('elm.showChannel', $('showChannel').checked ? '1' : '0');
+  localStorage.setItem('elm.showGame', $('showGame').checked ? '1' : '0');
+  syncOnscreenToggles();
   $('configName').value = c.name;
   setLoadedConfig(id);
+  savedSnapshot = snapshotNow();
   saveSel();
   render();
   $('status').textContent = `Loaded "${c.name}".`;
@@ -544,11 +614,21 @@ async function saveConfigNow() {
         showTitle: $('showTitle').checked, showBroadcaster: $('showChannel').checked, showGame: $('showGame').checked,
       }),
     });
-    setLoadedConfig(saved.id);
+    // loadConfigs() first — setLoadedConfig() reads the config's name out of the
+    // `configs` array, which for a brand-new (just-created) config doesn't have it yet
+    // until this refresh runs; the old order showed "New configuration" right after
+    // saving a new config instead of its actual name.
     await loadConfigs();
+    setLoadedConfig(saved.id);
+    savedSnapshot = snapshotNow();
+    refreshCfgDirty();
     // Past tense on purpose — this reports what THIS save just did, not an ongoing
-    // autosave. Nothing here saves again until the button is pressed.
-    $('status').textContent = `Saved "${saved.name}" — its open overlay just refreshed to match.`;
+    // autosave. Nothing here saves again until the button is pressed. The overlay clause
+    // only appears when one is actually connected — overlayCount comes from the server's
+    // live SSE subscriber count for this config, not assumed.
+    $('status').textContent = saved.overlayCount
+      ? `Saved "${saved.name}" — its open overlay just refreshed to match.`
+      : `Saved "${saved.name}".`;
   } catch (e) { $('status').textContent = '⚠ ' + e.message; }
 }
 
@@ -556,6 +636,7 @@ function newConfig() {
   setLoadedConfig(null);
   $('configName').value = '';
   $('configName').focus();
+  refreshCfgDirty();
   $('status').textContent = 'Editing a new (unsaved) configuration.';
 }
 
@@ -576,7 +657,7 @@ async function deleteConfigItem(id) {
   if (!confirm(`Delete configuration "${c ? c.name : id}"? Any overlay open on it will stop updating.`)) return;
   try {
     await api(`/api/configs/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    if (id === loadedConfigId) setLoadedConfig(null);
+    if (id === loadedConfigId) { setLoadedConfig(null); refreshCfgDirty(); }
     await loadConfigs();
   } catch (e) { $('status').textContent = '⚠ ' + e.message; }
 }
@@ -596,13 +677,24 @@ async function init() {
   $('preview').addEventListener('click', openOverlay);
   $('previewClose').addEventListener('click', closePreview);
   $('previewOverlay').addEventListener('click', e => { if (e.target.id === 'previewOverlay') closePreview(); });
-  $('configsToggle').addEventListener('click', openConfigsFlyout);
   $('configsClose').addEventListener('click', closeConfigsFlyout);
   $('configsFlyout').querySelector('.flyout-backdrop').addEventListener('click', closeConfigsFlyout);
+  $('cfgSwitchBtn').addEventListener('click', e => {
+    e.stopPropagation();
+    const menu = $('cfgMenu');
+    const wasOpen = !menu.hidden;
+    closeAllMenus();
+    if (!wasOpen) { menu.hidden = false; $('cfgSwitchBtn').setAttribute('aria-expanded', 'true'); }
+  });
+  $('cfgManageBtn').addEventListener('click', () => { closeAllMenus(); openConfigsFlyout(); });
+  $('manageLink2').addEventListener('click', openConfigsFlyout);
+  // Closes any open card ⋯ menu or the config-switch dropdown on an outside click.
+  document.addEventListener('click', closeAllMenus);
   document.addEventListener('keydown', e => {
     if (e.key !== 'Escape') return;
     if (!$('previewOverlay').hidden) closePreview();
     else if (!$('configsFlyout').hidden) closeConfigsFlyout();
+    else closeAllMenus();
   });
   $('clipSearch').addEventListener('input', render);
   $('configSave').addEventListener('click', saveConfigNow);
@@ -624,19 +716,34 @@ async function init() {
     if (saved !== null) $(id).checked = saved === '1';
     $(id).addEventListener('change', () => { localStorage.setItem('elm.' + id, $(id).checked ? '1' : '0'); updateActions(); });
   }
+  // Channel/Game only ever render as part of the title-card lower third (see
+  // overlay/player.js updateLowerThird — it bails out entirely when showTitle is off,
+  // regardless of these two), so checking them with Title card off wouldn't do anything.
+  // Disabled, not reset, so their value is preserved for whenever Title card comes back.
+  $('showTitle').addEventListener('change', syncOnscreenToggles);
+  syncOnscreenToggles();
   initDrag();
-  initToggle('filtersToggle', 'controlsBody', 'elm.filtersOpen');
-  initToggle('optionsToggle', 'listToolbarBody', 'elm.optionsOpen');
   $('preview').disabled = !loadedConfigId;
   try {
     const st = await api('/api/status');
+    ORDER_FIELDS = st.orderFields || {};
     if (!st.hasCreds) return showLogin('setup');
     if (st.authorized) {
-      showApp(); loadClips();
+      showApp(); loadClips();   // fired without awaiting — runs concurrently with loadConfigs() below
       await loadConfigs();
       // A config saved in a previous session may have since been deleted elsewhere.
       const still = configs.find(c => c.id === loadedConfigId);
-      if (still) { $('configName').value = still.name; setLoadedConfig(still.id); } else setLoadedConfig(null);
+      if (still) {
+        $('configName').value = still.name;
+        setLoadedConfig(still.id);
+        savedSnapshot = JSON.stringify([still.sequence, still.order, still.showTitle !== false, still.showBroadcaster !== false, still.showGame !== false]);
+      } else setLoadedConfig(null);
+      // Only from here on is savedSnapshot meaningful — loadClips() above can resolve
+      // and call refreshCfgDirty() before this point (it doesn't await loadConfigs()),
+      // which would otherwise compare against a not-yet-set savedSnapshot and flash the
+      // dot on for an unedited, already-saved config.
+      configsReady = true;
+      refreshCfgDirty();
     } else showLogin('idle');
   } catch { showLogin('idle'); }
 }

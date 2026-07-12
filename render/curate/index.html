@@ -26,8 +26,20 @@
       <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.5 6.5 0 0 0 9.8 9.8z"/></svg>
       <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.4 1.4M17.2 17.2L18.6 18.6M18.6 5.4L17.2 6.8M6.8 17.2L5.4 18.6"/></svg>
     </button>
-    <button id="configsToggle" class="btn ghost" type="button" disabled>Configurations</button>
-    <button id="configQuickSave" class="btn primary" type="button" disabled>Save configuration</button>
+    <!-- Quick config switch: current name + unsaved-state dot, dropdown to jump to any
+         saved config (capped/scrolled at ~10 rows); full manage (rename/duplicate/delete)
+         stays in the flyout below, reachable via "Manage all configurations…". -->
+    <div class="cfg-switch">
+      <button id="cfgSwitchBtn" class="btn ghost cfg-btn" type="button" disabled aria-haspopup="true" aria-expanded="false">
+        <span id="cfgSwitchName">Configurations</span><span id="cfgDot" class="cfg-dot"></span> ▾
+      </button>
+      <div id="cfgMenu" class="cfg-menu" hidden>
+        <div id="cfgMenuList" class="cfg-menu-list"></div>
+        <hr />
+        <button id="cfgManageBtn" class="cfg-item" type="button">Manage all configurations…</button>
+      </div>
+    </div>
+    <button id="configQuickSave" class="btn primary" type="button" disabled>Save</button>
     <button id="preview" class="btn primary" type="button" disabled>Open overlay ↗</button>
   </div>
 </header>
@@ -61,78 +73,84 @@
   <button id="catalogUpdate" class="btn ghost" type="button">⟳ Update from Twitch</button>
 </section>
 
-<!-- Filters + Options share one collapsed row (two tabs) — each expands independently
-     below it. Collapsed by default; remembers open/closed per tab across reloads. -->
-<section id="filterOptionsBar" class="controls-merged" hidden>
-  <div class="tabs-head">
-    <button id="filtersToggle" class="tab-toggle" type="button" aria-expanded="false" aria-controls="controlsBody">
-      Filters <span class="collapsible-chevron" aria-hidden="true">▾</span>
-    </button>
-    <button id="optionsToggle" class="tab-toggle" type="button" aria-expanded="false" aria-controls="listToolbarBody">
-      Options <span class="collapsible-chevron" aria-hidden="true">▾</span>
-    </button>
+<!-- Filters: narrow down which cataloged clips you're looking at. All apply instantly
+     (no fetch — the whole catalog is already loaded client-side). Always visible — these
+     are used every session, so there's nothing to expand. -->
+<section id="filterOptionsBar" class="filters" hidden>
+  <div class="field">
+    <label for="days">Period</label>
+    <select id="days">
+      <option value="0" selected>All time</option>
+      <option value="7">7 days</option>
+      <option value="30">30 days</option>
+      <option value="90">90 days</option>
+      <option value="365">1 year</option>
+    </select>
   </div>
-  <!-- Filters: narrow down which cataloged clips you're looking at. All apply instantly
-       (no fetch — the whole catalog is already loaded client-side). -->
-  <div id="controlsBody" class="collapsible-body" hidden>
-    <div class="field">
-      <label for="days">Period</label>
-      <select id="days">
-        <option value="0" selected>All time</option>
-        <option value="7">7 days</option>
-        <option value="30">30 days</option>
-        <option value="90">90 days</option>
-        <option value="365">1 year</option>
-      </select>
-    </div>
-    <div class="field">
-      <label for="first">Max</label>
-      <input id="first" type="number" min="1" value="50" />
-    </div>
-    <label class="chk" title="Show every cataloged clip in the period above, ignoring Max">
-      <input id="allClips" type="checkbox" /> Load all (no limit)
-    </label>
-    <div class="field field-search">
-      <label for="clipSearch">Search</label>
-      <input id="clipSearch" type="search" placeholder="Title or game…" />
-    </div>
-    <label class="chk"><input id="showHidden" type="checkbox" /> Show hidden</label>
+  <div class="field">
+    <label for="first">Max</label>
+    <input id="first" type="number" min="1" value="50" />
   </div>
-  <div id="listToolbarBody" class="collapsible-body" hidden>
-    <div class="field">
-      <label for="order">Order</label>
-      <select id="order">
-        <option value="random" selected>Random (each loop)</option>
-        <option value="views">By views</option>
-        <option value="recent">Most recent</option>
-        <option value="oldest">Oldest first</option>
-        <option value="custom">Custom (drag order)</option>
-      </select>
-    </div>
-    <label class="chk"><input id="showTitle" type="checkbox" checked /> Title card</label>
-    <label class="chk"><input id="showChannel" type="checkbox" checked /> Channel</label>
-    <label class="chk"><input id="showGame" type="checkbox" checked /> Game</label>
-    <span class="toolbar-sep" aria-hidden="true"></span>
-    <button id="dlall" class="btn ghost" type="button">Download all</button>
-    <button id="all" class="btn ghost" type="button">Include all</button>
-    <button id="none" class="btn ghost" type="button">Include none</button>
+  <div class="field field-chk" title="Show every cataloged clip in the period above, ignoring Max">
+    <label for="allClips">Load all</label>
+    <span class="chk-box"><input id="allClips" type="checkbox" /></span>
   </div>
+  <div class="field field-search">
+    <label for="clipSearch">Search</label>
+    <input id="clipSearch" type="search" placeholder="Title or game…" />
+  </div>
+  <div class="field field-chk">
+    <label for="showHidden">Show hidden</label>
+    <span class="chk-box"><input id="showHidden" type="checkbox" /></span>
+  </div>
+  <span class="toolbar-sep" aria-hidden="true"></span>
+  <button id="dlall" class="btn ghost" type="button">Download all</button>
+  <button id="all" class="btn ghost" type="button">Include all</button>
+  <button id="none" class="btn ghost" type="button">Include none</button>
 </section>
 
-<!-- Custom play order (shown only when Order = Custom) -->
-<section id="sequence" class="sequence" hidden>
-  <div class="seq-head">
-    <span class="seq-label">Sequence</span>
-    <span class="seq-hint">drag the tiles to set the play order</span>
-  </div>
-  <div id="seq-list" class="seq-list"></div>
-</section>
+<div class="body">
+  <main id="grid" class="grid"></main>
 
-<main id="grid" class="grid"></main>
+  <!-- Your reel: always visible regardless of Order (previously the drag strip only
+       existed when Order = Custom, so there was no way to see what you'd built in any
+       other mode). Order/on-overlay toggles live here now — they're reel settings, not
+       clip-browsing filters. -->
+  <aside id="sequence" class="reel" hidden>
+    <div class="reel-head">
+      <div class="reel-head-row"><span class="seq-label">Your reel</span></div>
+      <div id="reelStats" class="reel-stats">No clips included yet</div>
+      <div class="reel-order field">
+        <label for="order">Order</label>
+        <select id="order">
+          <option value="random" selected>Random (each loop)</option>
+          <option value="views">By views</option>
+          <option value="recent">Most recent</option>
+          <option value="oldest">Oldest first</option>
+          <option value="custom">Custom (drag order)</option>
+        </select>
+      </div>
+    </div>
+    <div class="reel-onscreen">
+      <span class="reel-onscreen-label">On overlay</span>
+      <label class="chk"><input id="showTitle" type="checkbox" checked /> Title card</label>
+      <label class="chk"><input id="showChannel" type="checkbox" checked /> Channel</label>
+      <label class="chk"><input id="showGame" type="checkbox" checked /> Game</label>
+    </div>
+    <div class="seq-head">
+      <span id="seqHint" class="seq-hint">drag the tiles to set the play order</span>
+    </div>
+    <div id="seq-list" class="seq-list"></div>
+    <div class="reel-foot">
+      <button id="manageLink2" class="manage-link" type="button">Manage all configurations…</button>
+    </div>
+  </aside>
+</div>
 
 <!-- Saved configurations: a flyout (not a permanent block on the page) — name + save the
      current selection, load/duplicate/delete any previous one, and open its live overlay
-     URL (for an OBS Browser Source). Opened from the "Configurations" topbar button. -->
+     URL (for an OBS Browser Source). Opened via "Manage all configurations…" (topbar
+     dropdown or reel panel). -->
 <div id="configsFlyout" class="flyout" hidden>
   <div class="flyout-backdrop"></div>
   <div class="flyout-panel">

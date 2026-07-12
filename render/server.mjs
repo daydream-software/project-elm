@@ -30,13 +30,33 @@ const ALLOWED_HOSTS = new Set([`localhost:${PORT}`, `127.0.0.1:${PORT}`]);
 
 let LOGIN = { authorized: tw.hasToken() };     // in-memory device-login state
 
+// Declarative order-mode metadata (field + direction, not a function) — the single
+// source of truth for "which field does each mode sort by". Exposed as-is via
+// /api/status so the curate UI's reel-panel preview (curate.js's buildComparator) can
+// build a matching comparator from the SAME data instead of hand-copying comparator
+// functions in a second file with nothing keeping them in sync.
+const ORDER_FIELDS = {
+  random: { field: 'views', dir: -1 },
+  views:  { field: 'views', dir: -1 },
+  recent: { field: 'createdAt', dir: -1, isDate: true },
+  oldest: { field: 'createdAt', dir: 1, isDate: true },
+  custom: null,
+};
+function buildComparator(mode) {
+  const f = ORDER_FIELDS[mode];
+  if (!f) return null;
+  return f.isDate
+    ? (a, b) => f.dir * (new Date(a[f.field]) - new Date(b[f.field]))
+    : (a, b) => f.dir * (a[f.field] - b[f.field]);
+}
+
 // Play order → (overlay order, display sort). 'random' = overlay reshuffles each
 // loop; the others play in a fixed sorted order.
 const ORDERS = {
-  random: { overlay: 'random',     sort: (a, b) => b.views - a.views },
-  views:  { overlay: 'sequential', sort: (a, b) => b.views - a.views },
-  recent: { overlay: 'sequential', sort: (a, b) => new Date(b.createdAt) - new Date(a.createdAt) },
-  oldest: { overlay: 'sequential', sort: (a, b) => new Date(a.createdAt) - new Date(b.createdAt) },
+  random: { overlay: 'random',     sort: buildComparator('random') },
+  views:  { overlay: 'sequential', sort: buildComparator('views') },
+  recent: { overlay: 'sequential', sort: buildComparator('recent') },
+  oldest: { overlay: 'sequential', sort: buildComparator('oldest') },
   custom: { overlay: 'sequential', sort: null },   // keep the exact incoming id order (drag sequence)
 };
 
@@ -140,7 +160,7 @@ const server = http.createServer(async (req, res) => {
     // Redirect bare "/" to the UI dir so its relative assets resolve correctly.
     if (p === '/') { res.writeHead(302, { Location: '/render/curate/' }); return res.end(); }
     if (p === '/api/status') {
-      return send(res, 200, { hasCreds: !!tw.CLIENT_ID, authorized: tw.hasToken(), login: LOGIN });
+      return send(res, 200, { hasCreds: !!tw.CLIENT_ID, authorized: tw.hasToken(), login: LOGIN, orderFields: ORDER_FIELDS });
     }
     if (p === '/api/login' && req.method === 'POST') {
       if (tw.hasToken()) return send(res, 200, { authorized: true });
@@ -239,7 +259,9 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse(await readBody(req) || '{}');
       const saved = cfg.saveConfig(body);
       notify(saved.id);
-      return send(res, 200, saved);
+      // Lets the curate UI only claim "its open overlay just refreshed" when one actually is.
+      const overlayCount = subscribers.get(saved.id)?.size || 0;
+      return send(res, 200, { ...saved, overlayCount });
     }
     const cm = p.match(/^\/api\/configs\/([A-Za-z0-9_-]+)(?:\/(playlist))?$/);
     if (cm) {
