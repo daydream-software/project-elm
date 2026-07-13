@@ -1,6 +1,6 @@
 # Project Elm
 
-*A Daydream Software project.* 📖 [Website & guides](https://daydream-software.github.io/project-elm/)
+*A Daydream Software project.* 📖 [Website & guides](https://docs.daydreamsoftware.ca/project-elm/)
 
 A small **local** tool to turn your own Twitch clips into a highlights reel — pick
 your clips in a web UI, download them via the official Twitch API, then either play
