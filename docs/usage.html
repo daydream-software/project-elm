@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Usage — Project Elm</title>
+<meta name="description" content="How to curate clips, build a reel, save configurations, and run the live overlay in OBS with Project Elm.">
+<link rel="icon" href="assets/daydream-mark.svg">
+<script>
+  /* Apply theme before paint (no flash). Dark = no attribute; light = data-theme. */
+  (function () { try { var m = localStorage.getItem('elm-docs.theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'); if (m === 'light') document.documentElement.setAttribute('data-theme', 'light'); } catch (e) {} })();
+</script>
+<link rel="stylesheet" href="assets/css/site.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap">
+    <div class="bar">
+      <a class="brand" href="index.html">
+        <img class="mark" src="assets/daydream-mark.svg" alt="">
+        <span>Project Elm</span>
+      </a>
+      <nav class="nav">
+        <button id="theme-toggle" class="icon-btn" type="button" title="Toggle theme" aria-label="Toggle theme">
+          <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.5 6.5 0 0 0 9.8 9.8z"/></svg>
+          <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.4 1.4M17.2 17.2L18.6 18.6M18.6 5.4L17.2 6.8M6.8 17.2L5.4 18.6"/></svg>
+        </button>
+        <a href="index.html">Overview</a>
+        <a href="install.html">Install</a>
+        <a href="usage.html" aria-current="page">Usage</a>
+        <a class="cta" href="https://github.com/daydream-software/project-elm">GitHub ↗</a>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main class="wrap prose">
+  <h1>Using Project Elm</h1>
+  <p class="sub">A tour of the selection UI, saved reels, and the live OBS overlay. Screenshots below use fabricated demo clips — your own grid will show your channel's real clips.</p>
+
+  <h2>The selection grid</h2>
+  <p>Once you're logged in, every clip Twitch has for your channel shows up as a card with a status badge:</p>
+  <table>
+    <tr><th>✓ Downloaded</th><td>Already pulled locally — click the card (or its <strong>+ Add to reel</strong> button) to include/exclude it.</td></tr>
+    <tr><th>not downloaded</th><td>Click <strong>⬇ Download</strong> (or the card) to pull it via the official Twitch endpoint — it's auto-included once it lands.</td></tr>
+    <tr><th>⚠ Removed from Twitch</th><td>Twitch no longer lists this clip, but you still have it downloaded — it keeps its title/thumbnail and keeps playing in your reel.</td></tr>
+  </table>
+  <p>Use <strong>Search</strong> (title or game), <strong>Period</strong>/<strong>Max</strong>/<strong>Load all</strong>, and <strong>Show hidden</strong> to filter a large clip list — all instant, no re-fetch.</p>
+
+  <figure class="shot-figure">
+    <div class="shot">
+      <img class="shot-themed" data-dark="assets/img/curate-main-dark.jpg" data-light="assets/img/curate-main-light.jpg" alt="The clip grid with a mix of downloaded, not-downloaded, and removed-from-Twitch cards, next to the “Your reel” panel showing 4 included clips in a custom order.">
+      <noscript><img src="assets/img/curate-main-dark.jpg" alt="The clip grid with a mix of downloaded, not-downloaded, and removed-from-Twitch cards, next to the “Your reel” panel showing 4 included clips in a custom order."></noscript>
+    </div>
+    <figcaption>The grid (left) and the always-visible “Your reel” panel (right).</figcaption>
+  </figure>
+
+  <h2>Card actions</h2>
+  <p>Each card keeps its fast actions up front and tucks the rare/destructive ones away:</p>
+  <ul>
+    <li><strong>▶ Preview</strong> — always one click, opens the clip in a popup (plays the local file if downloaded, falls back to the official Twitch embed otherwise).</li>
+    <li><strong>Primary button</strong> — Download, or Add/remove from the reel, depending on state.</li>
+    <li><strong>⋯ menu</strong> — <strong>Hide</strong> (drop it from the grid entirely, reversible via <strong>Show hidden</strong>) and <strong>Delete download</strong> (frees the local file; re-downloadable unless the clip is gone from Twitch too, in which case it's final).</li>
+  </ul>
+  <figure class="shot-figure">
+    <div class="shot">
+      <img class="shot-themed" data-dark="assets/img/curate-kebab-dark.jpg" data-light="assets/img/curate-kebab-light.jpg" alt="A card's ⋯ menu open, showing Hide and Delete download options.">
+      <noscript><img src="assets/img/curate-kebab-dark.jpg" alt="A card's ⋯ menu open, showing Hide and Delete download options."></noscript>
+    </div>
+    <figcaption>The ⋯ menu — rare and destructive actions only.</figcaption>
+  </figure>
+
+  <figure class="shot-figure">
+    <div class="shot">
+      <img class="shot-themed" data-dark="assets/img/curate-preview-dark.jpg" data-light="assets/img/curate-preview-light.jpg" alt="A clip preview popup playing a downloaded clip in-page.">
+      <noscript><img src="assets/img/curate-preview-dark.jpg" alt="A clip preview popup playing a downloaded clip in-page."></noscript>
+    </div>
+    <figcaption>Previewing a clip without leaving the grid.</figcaption>
+  </figure>
+
+  <h2>Building "Your reel"</h2>
+  <p>The panel on the right always shows your included clips, with a running clip count and total duration. Pick a play <strong>Order</strong>:</p>
+  <ul>
+    <li><strong>Random</strong> — the overlay reshuffles every loop (never repeating the last clip immediately).</li>
+    <li><strong>By views / Most recent / Oldest</strong> — a fixed sort.</li>
+    <li><strong>Custom (drag order)</strong> — drag the tiles in the panel to set the exact play order.</li>
+  </ul>
+  <p>The <strong>On overlay</strong> toggles (Title card / Channel / Game) control what's burned into the live lower-third — independent from what's shown in the grid.</p>
+
+  <h2>Saved configurations</h2>
+  <p>A configuration is a named, reusable reel: its clip selection, order, and toggles. Save as many as you like — "Highlights", "Fails", a per-game reel — each keeps its own stable overlay URL, so renaming or editing one never breaks an OBS source already pointed at it.</p>
+  <figure class="shot-figure">
+    <div class="shot">
+      <img class="shot-themed" data-dark="assets/img/curate-configs-dark.jpg" data-light="assets/img/curate-configs-light.jpg" alt="The configurations flyout, listing saved reels with Load, Duplicate, Open, and Delete actions.">
+      <noscript><img src="assets/img/curate-configs-dark.jpg" alt="The configurations flyout, listing saved reels with Load, Duplicate, Open, and Delete actions."></noscript>
+    </div>
+    <figcaption>Manage all configurations: search, Load, Duplicate, Open, Delete.</figcaption>
+  </figure>
+  <p>The topbar's quick-switch shows the currently loaded configuration and a dot when it has unsaved changes. Click <strong>Save</strong> to update it in place, <strong>New</strong> to start a fresh draft, or open the flyout to manage the full list.</p>
+
+  <h2>The live overlay in OBS</h2>
+  <ol class="step-list">
+    <li>
+      <h3>Open the overlay URL</h3>
+      <p>Click <strong>Open overlay ↗</strong> (or a saved configuration's own <strong>Open ↗</strong>) to get its stable URL: <code>/overlay/?config=&lt;id&gt;</code>.</p>
+    </li>
+    <li>
+      <h3>Add it as a Browser Source</h3>
+      <p>In OBS, add a <strong>Browser Source</strong> pointed at that URL. Add as many sources as you like, each pointed at a different saved configuration, to run more than one reel at once.</p>
+      <div class="callout warn">
+        <span class="glyph">⚠️</span>
+        <p>In the source's <strong>Properties</strong>, leave <strong>“Shutdown source when not visible”</strong> unchecked. That setting makes OBS reload the page on every scene switch — the exact hard refresh the live-reload design avoids. Left unchecked, the overlay also auto-detects when its scene goes off program and pauses + rewinds to clip 1, so it always resumes clean.</p>
+      </div>
+    </li>
+    <li>
+      <h3>Edit live — no refresh needed</h3>
+      <p>Adding/removing clips, re-ordering, toggling Title/Channel/Game, even downloading or deleting a clip the reel uses — all push to any overlay already open on that configuration, instantly, over SSE.</p>
+    </li>
+  </ol>
+  <figure class="shot-figure">
+    <div class="shot">
+      <img src="assets/img/overlay-lowerthird.jpg" alt="The overlay playing a clip full-screen with its lower-third title card visible.">
+    </div>
+    <figcaption>The overlay as OBS sees it — full-bleed video, crossfade transitions, optional lower-third.</figcaption>
+  </figure>
+
+  <h2>Alternative: render a fixed MP4</h2>
+  <p>Prefer a file you can upload instead of a live source? Build a <code>manifest.json</code> (the CLI below can generate one for you) and render it:</p>
+  <pre><code>node render/render-reel.mjs render/realclips/manifest.json   # → render/realclips/reel.mp4</code></pre>
+  <p>Each clip is normalized (letterboxed, constant fps), loudness-evened (<code>loudnorm</code>), optionally titled, then chained with a crossfade — the output plays anywhere, including as an OBS <strong>Media Source</strong>.</p>
+
+  <h2>Optional CLI</h2>
+  <p>The web UI covers everything, but the same fetch/select is available from the terminal:</p>
+  <pre><code>node render/cli/fetch-clips.mjs login              # one-time browser authorization
+node render/cli/fetch-clips.mjs list [--days N] [--first N]
+node render/cli/fetch-clips.mjs pull &lt;all|1,3,5&gt;   # download + write manifest.json</code></pre>
+
+  <div class="hero-ctas" style="justify-content:flex-start;">
+    <a class="btn primary" href="install.html">← Back to install</a>
+    <a class="btn" href="https://github.com/daydream-software/project-elm#readme">Full README ↗</a>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="bar">
+      <span class="brandlink">
+        <img class="mark" src="assets/daydream-mark.svg" alt="">
+        Daydream Software
+      </span>
+      <span>·</span>
+      <span>Project Elm</span>
+      <span>·</span>
+      <span>© 2026 Daydream Software</span>
+      <span>·</span>
+      <a href="https://github.com/daydream-software/project-elm/blob/main/LICENSE">MIT License</a>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/theme.js"></script>
+</body>
+</html>

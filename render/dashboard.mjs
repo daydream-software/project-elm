@@ -34,11 +34,16 @@ let clipStatsSafetyTimer = null;
 let lastLineCount = 0;
 let pulseFrame = 0;
 
+/** Wrap a string in an ANSI color code, unless `NO_COLOR` is set. */
 function colorize(s, code) { return useColor ? `\x1b[${code}m${s}\x1b[0m` : s; }
 
-/** Funnel for anything this module used to hand straight to console.log/error.
- *  While the live panel is running these fold into it (last few lines); when
- *  there's no panel (non-TTY) they print immediately, same as before. */
+/**
+ * Funnel for anything this module used to hand straight to console.log/error.
+ * While the live panel is running these fold into it (last few lines); when
+ * there's no panel (non-TTY) they print immediately, same as before.
+ *
+ * @param {string} line
+ */
 export function log(line) {
   const stamped = `[${new Date().toLocaleTimeString()}] ${line}`;
   if (!panelActive) { console.log(stamped); return; }
@@ -46,6 +51,7 @@ export function log(line) {
   if (logLines.length > MAX_LOG_LINES) logLines.shift();
 }
 
+/** Format a byte count as a human-readable size (`'0 B'`, `'12.3 MB'`, …). */
 function humanSize(n) {
   if (!n) return '0 B';
   if (n < 1024) return `${n} B`;
@@ -55,6 +61,7 @@ function humanSize(n) {
   return `${n.toFixed(1)} ${units[u]}`;
 }
 
+/** Format a duration in milliseconds as `'Nh MMm'` / `'Nm SSs'` / `'Ns'`. */
 function formatDuration(ms) {
   const s = Math.floor(ms / 1000);
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
@@ -63,10 +70,19 @@ function formatDuration(ms) {
   return `${sec}s`;
 }
 
+/** Truncate a name to {@link MAX_NAME_LEN}, with an ellipsis if it was cut. */
 function truncate(name) {
   return name.length > MAX_NAME_LEN ? name.slice(0, MAX_NAME_LEN - 1) + '…' : name;
 }
 
+/**
+ * Count files (and total bytes) in a directory, optionally filtered by extension.
+ * Tolerant of the directory not existing yet, or a file disappearing mid-scan.
+ *
+ * @param {string} dir
+ * @param {string} [ext] - Only count files ending with this suffix (e.g. `'.mp4'`).
+ * @returns {{count: number, bytes: number}}
+ */
 function dirStats(dir, ext) {
   let files;
   try { files = fs.readdirSync(dir); } catch { return { count: 0, bytes: 0 }; }
@@ -88,13 +104,16 @@ let clipStats = { count: 0, bytes: 0 };
 let clipStatsWatcher = null;
 let clipStatsDebounce = null;
 
+/** Re-scan `CLIPS_DIR` for the current downloaded clip count/size. */
 function refreshClipStats() { clipStats = dirStats(tw.CLIPS_DIR, '.mp4'); }
 
+/** Debounce a burst of filesystem writes (e.g. a multi-clip download) into one rescan. */
 function scheduleClipStatsRefresh() {
   clearTimeout(clipStatsDebounce);
   clipStatsDebounce = setTimeout(refreshClipStats, 150);   // coalesce a burst of writes into one scan
 }
 
+/** Start (or restart) watching `CLIPS_DIR` for changes; a no-op if it doesn't exist yet. */
 function watchClipsDir() {
   try {
     clipStatsWatcher = fs.watch(tw.CLIPS_DIR, scheduleClipStatsRefresh);
@@ -102,6 +121,7 @@ function watchClipsDir() {
   } catch { /* realclips/ doesn't exist yet — the safety-net timer retries */ }
 }
 
+/** Render the "Twitch" status line: missing creds / authorized / pending login / error. */
 function authLine() {
   if (!tw.CLIENT_ID) return colorize('⚠ No TWITCH_CLIENT_ID (.env) — see README.md → Setup.', '33');
   if (tw.hasToken()) return colorize('authorized ✓', '32');
@@ -116,6 +136,7 @@ function authLine() {
  * overlay never reports its play/pause state back to the server (OBS
  * visibility is handled entirely client-side in player.js), so a source
  * that's off-program in OBS still shows as connected here. */
+/** One "Overlays" summary line, plus one line per config with at least one connected client. */
 function overlayLines() {
   const rows = [];
   for (const [id, set] of state.subscribers) {
@@ -130,6 +151,7 @@ function overlayLines() {
   return [`Overlays    ${rows.length} active (SSE-connected)`, ...rows];
 }
 
+/** Total number of connected overlay (SSE) clients, across all configs. */
 function overlayClientCount() {
   let n = 0;
   for (const set of state.subscribers.values()) n += set.size;
@@ -141,6 +163,14 @@ function overlayClientCount() {
  * server.mjs's /api/ui/presence), and is an overlay connected (subscribers, same idea
  * per config). Each gets its own dot so "someone's on the web UI" and "OBS is pulling
  * a reel" read as distinct facts, not folded into one vague activity pulse. */
+/**
+ * One status-line row: a pulsing dot when `count > 0`, a dimmed dot otherwise.
+ *
+ * @param {string} label - Row label (padded to align the dots).
+ * @param {number} count - Active count; determines on/off.
+ * @param {string} extra - Text shown when `count > 0`.
+ * @returns {string}
+ */
 function statusLine(label, count, extra) {
   const on = count > 0;
   const dot = on ? colorize('●', pulseFrame % 2 ? '1;32' : '2;32') : colorize('○', '2');
@@ -148,6 +178,7 @@ function statusLine(label, count, extra) {
   return `${label.padEnd(12)}${dot} ${text}`;
 }
 
+/** Build every line of the dashboard panel for one render pass. */
 function buildPanel() {
   pulseFrame++;   // once per render pass, not per row — keeps every active dot in phase
   const uiCount = state.uiSubscribers.size;
@@ -175,6 +206,7 @@ function buildPanel() {
   return lines;
 }
 
+/** Redraw the panel in place using ANSI cursor movement (never throws). */
 function render() {
   try {
     const lines = buildPanel();
@@ -189,10 +221,19 @@ function render() {
   } catch { /* a redraw hiccup must never take the server down — skip this frame */ }
 }
 
-/** Start the dashboard. `subscribers` is server.mjs's live config-id → Set<res>
- *  map (passed by reference so this always reflects the real connection state);
- *  `uiSubscribers` is the same idea for open curate-UI tabs; `getLogin` returns
- *  its in-memory device-login state. */
+/**
+ * Start the dashboard: renders once immediately, then redraws every {@link REFRESH_MS}.
+ * Falls back to a single one-line startup log if stdout isn't a TTY (piped/logged).
+ *
+ * @param {object} opts
+ * @param {number} opts.port
+ * @param {Map<string, Set<import('node:http').ServerResponse>>} [opts.subscribers] -
+ *   server.mjs's live config-id → Set<res> map, passed by reference so this always
+ *   reflects the real connection state.
+ * @param {Set<import('node:http').ServerResponse>} [opts.uiSubscribers] - Same idea,
+ *   for open curate-UI tabs.
+ * @param {() => object} [opts.getLogin] - Returns the in-memory device-login state.
+ */
 export function start({ port, subscribers, uiSubscribers, getLogin }) {
   state.port = port;
   if (subscribers) state.subscribers = subscribers;

@@ -31,6 +31,26 @@
  * with `--remote-debugging-port=9222` and open chrome://inspect in a normal Chrome.
  * ========================================================================== */
 
+/**
+ * @typedef {object} Clip
+ * @property {string} mp4 - URL of the downloaded clip file.
+ * @property {string} [title]
+ * @property {string} [game]
+ * @property {string} [broadcaster]
+ * @property {number} [duration] - Seconds; used only as a fallback for the safety timer.
+ */
+
+/**
+ * @typedef {object} PlayerSettings
+ * @property {'random'|'sequential'} order
+ * @property {boolean} loop
+ * @property {number} transitionMs
+ * @property {boolean} showTitle
+ * @property {boolean} [showGame]
+ * @property {boolean} [showBroadcaster]
+ * @property {boolean} muted
+ */
+
 const DEFAULTS = {
   order: 'random',       // 'random' | 'sequential'
   loop: true,
@@ -48,13 +68,20 @@ const els = {
   message: document.getElementById('message'),
 };
 
+/** Show the on-screen status message (e.g. "no clips yet", a load error). */
 function showMessage(text) {
   els.message.textContent = text;
   els.message.hidden = false;
 }
+/** Hide the on-screen status message. */
 function hideMessage() { els.message.hidden = true; }
 
-/* Fisher–Yates shuffle (copy, does not mutate the input). */
+/**
+ * Fisher–Yates shuffle (copy, does not mutate the input).
+ *
+ * @param {Clip[]} arr
+ * @returns {Clip[]} A new, shuffled array.
+ */
 function shuffle(arr) {
   const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) {
@@ -64,6 +91,13 @@ function shuffle(arr) {
   return a;
 }
 
+/**
+ * Wrap a `.layer` DOM element into the small state object the {@link Player} tracks
+ * per layer.
+ *
+ * @param {HTMLElement} el
+ * @returns {{el: HTMLElement, video: HTMLVideoElement, clip: ?Clip, timer: ?number}}
+ */
 function makeLayer(el) {
   return {
     el,
@@ -73,7 +107,12 @@ function makeLayer(el) {
   };
 }
 
+/** Plays a configuration's clips back-to-back with a double-buffered crossfade. */
 class Player {
+  /**
+   * @param {Clip[]} order - Initial play order.
+   * @param {PlayerSettings} settings
+   */
   constructor(order, settings) {
     this.order = order;
     this.settings = settings;
@@ -102,6 +141,7 @@ class Player {
     });
   }
 
+  /** Prepare and start the first clip, and preload the second into the back layer. */
   async start() {
     document.documentElement.style.setProperty('--transition-ms', this.settings.transitionMs + 'ms');
     this.prepare(this.front, this.order[0]);
@@ -114,7 +154,12 @@ class Player {
     }
   }
 
-  /* Prepare a layer for a clip WITHOUT making it visible (preload the <video>). */
+  /**
+   * Prepare a layer for a clip WITHOUT making it visible (preload the <video>).
+   *
+   * @param {ReturnType<typeof makeLayer>} layer
+   * @param {Clip} clip
+   */
   prepare(layer, clip) {
     layer.clip = clip;
     if (layer.timer) { clearTimeout(layer.timer); layer.timer = null; }
@@ -123,7 +168,13 @@ class Player {
     layer.video.load();
   }
 
-  /* Start playback of a (already prepared) layer. */
+  /**
+   * Start playback of an already-prepared layer.
+   *
+   * @param {ReturnType<typeof makeLayer>} layer
+   * @param {boolean} [firstPlay=false] - True for the very first clip on page load,
+   *   where autoplay may be blocked pending a user gesture.
+   */
   async startLayer(layer, firstPlay = false) {
     const ok = await this.tryPlay(layer.video);
     if (!ok && firstPlay) {
@@ -137,14 +188,22 @@ class Player {
     this.armSafetyTimer(layer);
   }
 
+  /**
+   * @param {HTMLVideoElement} video
+   * @returns {Promise<boolean>} Whether playback actually started.
+   */
   async tryPlay(video) {
     try { await video.play(); return true; }
     catch (_) { return false; }
   }
 
-  /* Fallback advance: if a clip never fires timeupdate/ended (missing or corrupt
+  /**
+   * Fallback advance: if a clip never fires timeupdate/ended (missing or corrupt
    * MP4), force the transition shortly after its expected duration so the reel
-   * never stalls on a black frame. Healthy clips transition via onTimeUpdate first. */
+   * never stalls on a black frame. Healthy clips transition via onTimeUpdate first.
+   *
+   * @param {ReturnType<typeof makeLayer>} layer
+   */
   armSafetyTimer(layer) {
     if (layer.timer) clearTimeout(layer.timer);
     const dur = Number(layer.clip.duration) || 30;
@@ -154,6 +213,7 @@ class Player {
     }, ms);
   }
 
+  /** `timeupdate` handler: begins the crossfade once within `transitionSec` of the end. */
   onTimeUpdate(layer) {
     if (layer !== this.front || this.transitioning || this.suspended) return;
     const v = layer.video;
@@ -161,17 +221,20 @@ class Player {
     if (v.duration - v.currentTime <= this.transitionSec) this.beginTransition();
   }
 
+  /** `ended` handler — safety net for a clip shorter than the transition, or unknown duration. */
   onEnded(layer) {
-    // Safety net: clip shorter than the transition, or unknown duration.
     if (layer === this.front && !this.transitioning && !this.suspended) this.beginTransition();
   }
 
+  /**
+   * `error` handler. The MP4 broke. If it's on screen, skip past it now; a broken
+   * preload on the back layer is caught by its safety timer once it becomes the front.
+   */
   onVideoError(layer) {
-    // The MP4 broke. If it's on screen, skip past it now; a broken preload on the
-    // back layer is caught by its safety timer once it becomes the front.
     if (layer === this.front && !this.transitioning && !this.suspended) this.beginTransition();
   }
 
+  /** Start crossfading from the front layer to the (already-preloaded) back layer. */
   beginTransition() {
     if (this.transitioning || this.suspended) return;
     this.transitioning = true;
@@ -196,6 +259,14 @@ class Player {
     setTimeout(() => this.finalize(from, to, nextPos), this.settings.transitionMs);
   }
 
+  /**
+   * Complete a crossfade: pause/clean up the old front layer, promote the new one,
+   * and preload whatever comes after it.
+   *
+   * @param {ReturnType<typeof makeLayer>} from - The layer that was on screen.
+   * @param {ReturnType<typeof makeLayer>} to - The layer now on screen.
+   * @param {number} nextPos - `this.order` index `to` now represents.
+   */
   finalize(from, to, nextPos) {
     from.video.pause();
     if (from.timer) { clearTimeout(from.timer); from.timer = null; }
@@ -223,10 +294,15 @@ class Player {
     }
   }
 
-  /* Hot-swap in a freshly-fetched configuration (SSE live reload). Never touches
+  /**
+   * Hot-swap in a freshly-fetched configuration (SSE live reload). Never touches
    * what's currently on screen: while playing, the new order is staged and takes
    * over at the next loop wrap (see finalize); while suspended (OBS source off
-   * program), it's safe to apply immediately since nothing is visible anyway. */
+   * program), it's safe to apply immediately since nothing is visible anyway.
+   *
+   * @param {PlayerSettings} settings
+   * @param {Clip[]} clips
+   */
   applyLive(settings, clips) {
     this.settings = { ...this.settings, ...settings };
     this.transitionSec = this.settings.transitionMs / 1000;
@@ -241,8 +317,10 @@ class Player {
     else this.pendingOrder = freshOrder;
   }
 
-  /* Pause both layers and rewind to clip 1 — used when the OBS source goes off
-   * program, so it resumes clean (see resume()) instead of mid-clip. */
+  /**
+   * Pause both layers and rewind to clip 1 — used when the OBS source goes off
+   * program, so it resumes clean (see resume()) instead of mid-clip.
+   */
   suspend() {
     if (this.suspended) return;
     this.suspended = true;
@@ -253,6 +331,7 @@ class Player {
     this.resetToStart();
   }
 
+  /** Rewind state to clip 1 (front) with clip 2 preloaded (back), without touching playback. */
   resetToStart() {
     if (this.pendingOrder) { this.order = this.pendingOrder; this.pendingOrder = null; }
     this.pos = 0;
@@ -264,18 +343,22 @@ class Player {
     if (this.order.length > 1 || this.settings.loop) this.prepare(this.back, this.order[1 % this.order.length]);
   }
 
-  /* Back on program: play from the rewound clip 1 (autoplay-gated the same way a
-   * fresh page load would be, in case a plain browser tab is previewing this). */
+  /**
+   * Back on program: play from the rewound clip 1 (autoplay-gated the same way a
+   * fresh page load would be, in case a plain browser tab is previewing this).
+   */
   resume() {
     if (!this.suspended) return;
     this.suspended = false;
     this.startLayer(this.front, /* firstPlay */ true);
   }
 
-  /* Tear down completely — used when a live-reloaded configuration drops to zero
+  /**
+   * Tear down completely — used when a live-reloaded configuration drops to zero
    * downloaded clips (see main()'s applyFetched). Removes this instance's video
    * listeners so a later Player built for the same DOM (once clips come back)
-   * doesn't fight a zombie instance still reacting to the shared <video> elements. */
+   * doesn't fight a zombie instance still reacting to the shared <video> elements.
+   */
   stop() {
     this.suspended = true;   // belt-and-suspenders: inert even if a listener fires mid-teardown
     for (const { layer, onTime, onEnd, onErr } of this._listeners) {
@@ -290,18 +373,29 @@ class Player {
     els.lowerThird.classList.remove('show');
   }
 
+  /**
+   * Reshuffle `this.order`, retrying until the first clip isn't `avoidClip` — avoids
+   * an immediate repeat when a random reel wraps back to its own start.
+   *
+   * @param {Clip} avoidClip
+   */
   reshuffleAvoiding(avoidClip) {
     let arr;
     do { arr = shuffle(this.order); } while (arr.length > 1 && arr[0] === avoidClip);
     this.order = arr;
   }
 
+  /** End of playlist without loop: fade to black on the last clip. */
   finishEnd() {
-    // End of playlist without loop: fade to black on the last clip.
     this.front.el.classList.remove('front');
     els.lowerThird.classList.remove('show');
   }
 
+  /**
+   * Update the lower-third title/meta text for a clip, per the current toggle settings.
+   *
+   * @param {?Clip} clip
+   */
   updateLowerThird(clip) {
     const s = this.settings;
     if (!s.showTitle || !clip) { els.lowerThird.classList.remove('show'); return; }
@@ -314,6 +408,12 @@ class Player {
     els.lowerThird.classList.toggle('show', !!(clip.title || meta));
   }
 
+  /**
+   * Show the "click to start" gate (for blocked autoplay) and run `onClick` once
+   * the user clicks it.
+   *
+   * @param {() => void} onClick
+   */
   showGate(onClick) {
     els.startGate.hidden = false;
     els.startGate.addEventListener('click', () => {
@@ -323,19 +423,31 @@ class Player {
   }
 }
 
+/**
+ * Fetch a configuration's resolved playlist from the server.
+ *
+ * @param {string} configId
+ * @returns {Promise<{settings: object, clips: Clip[]}>}
+ * @throws {Error} On a non-OK response.
+ */
 async function fetchPlaylist(configId) {
   const res = await fetch(`/api/configs/${encodeURIComponent(configId)}/playlist`, { cache: 'no-store' });
   if (!res.ok) throw new Error('HTTP ' + res.status);
   return res.json();
 }
 
-/* On-screen debug HUD (opt-in via ?debug=1 — see the header comment). There's no
+/**
+ * On-screen debug HUD (opt-in via ?debug=1 — see the header comment). There's no
  * console to read on the actual page OBS renders, so this surfaces the three things
  * worth checking live: is the SSE connection up, has an OBS visibility event ever
  * arrived, and what's the real <video> state right now (which may differ from what
  * OBS is visually compositing for an off-program source — OBS can stop requesting
  * frames from a source that isn't on program or preview, so its output can look
- * "frozen" even though the underlying page state already moved on). */
+ * "frozen" even though the underlying page state already moved on).
+ *
+ * @returns {{sse: string, sseAt: ?Date, obs: string, obsAt: ?Date}} Mutable state the
+ *   caller updates as SSE/OBS events arrive; rendered into the HUD every 300ms.
+ */
 function initDebugHud() {
   const hud = document.createElement('div');
   hud.id = 'debug-hud';
@@ -355,6 +467,10 @@ function initDebugHud() {
   return state;
 }
 
+/**
+ * Entry point: reads `?config=<id>` (and `?debug=1`), loads the configuration,
+ * starts the {@link Player}, and wires up live reload (SSE) + OBS visibility events.
+ */
 async function main() {
   // A saved configuration's overlay URL, e.g. /overlay/?config=<id> — copy that
   // from the "Open overlay" button in the selection UI into an OBS Browser Source.
@@ -368,6 +484,13 @@ async function main() {
 
   let player = null;   // null while the configuration has no downloaded clips
 
+  /**
+   * Apply a freshly-fetched playlist: creates the {@link Player} on first load,
+   * hot-swaps it on subsequent (SSE-triggered) calls, and tears it down if the
+   * configuration has no downloaded clips.
+   *
+   * @param {{settings?: object, clips?: Clip[]}} data
+   */
   async function applyFetched(data) {
     const settings = { ...DEFAULTS, ...(data.settings || {}) };
     const clips = (data.clips || []).filter(c => c && c.mp4);

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install — Project Elm</title>
+<meta name="description" content="Install and configure Project Elm: requirements, creating a Twitch app, and running the local server.">
+<link rel="icon" href="assets/daydream-mark.svg">
+<script>
+  /* Apply theme before paint (no flash). Dark = no attribute; light = data-theme. */
+  (function () { try { var m = localStorage.getItem('elm-docs.theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'); if (m === 'light') document.documentElement.setAttribute('data-theme', 'light'); } catch (e) {} })();
+</script>
+<link rel="stylesheet" href="assets/css/site.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap">
+    <div class="bar">
+      <a class="brand" href="index.html">
+        <img class="mark" src="assets/daydream-mark.svg" alt="">
+        <span>Project Elm</span>
+      </a>
+      <nav class="nav">
+        <button id="theme-toggle" class="icon-btn" type="button" title="Toggle theme" aria-label="Toggle theme">
+          <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.5 6.5 0 0 0 9.8 9.8z"/></svg>
+          <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.4 1.4M17.2 17.2L18.6 18.6M18.6 5.4L17.2 6.8M6.8 17.2L5.4 18.6"/></svg>
+        </button>
+        <a href="index.html">Overview</a>
+        <a href="install.html" aria-current="page">Install</a>
+        <a href="usage.html">Usage</a>
+        <a class="cta" href="https://github.com/daydream-software/project-elm">GitHub ↗</a>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main class="wrap prose">
+  <h1>Install &amp; set up</h1>
+  <p class="sub">Everything runs on your own machine — no hosted service, no client secret. This takes about five minutes.</p>
+
+  <h2>Requirements</h2>
+  <table>
+    <tr><th>Node.js 18+</th><td>No npm dependencies to install — the tool runs directly with <code>node</code>.</td></tr>
+    <tr><th>ffmpeg + ffprobe</th><td>Only needed for the optional <em>rendered MP4</em> path. A normal distro build works (<code>apt install ffmpeg</code>). Ideally built with <code>drawtext</code> (libfreetype) so clip titles can be burned in — without it, rendering still works, just without titles.</td></tr>
+    <tr><th>A free Twitch account</th><td>To register a Public application (below) and to log in as the channel whose clips you want to reel.</td></tr>
+  </table>
+
+  <ol class="step-list">
+    <li>
+      <h3>Get the code</h3>
+      <pre><code>git clone https://github.com/daydream-software/project-elm.git
+cd project-elm</code></pre>
+    </li>
+
+    <li>
+      <h3>Register a Twitch application (Public)</h3>
+      <p>Project Elm needs its own Twitch Client ID to talk to the Helix API on your behalf.</p>
+      <ol>
+        <li>Go to <a href="https://dev.twitch.tv/console/apps">dev.twitch.tv/console/apps</a> and sign in.</li>
+        <li>Click <strong>Register Your Application</strong>.</li>
+        <li>Fill in:
+          <ul>
+            <li><strong>Name</strong> — anything unique, e.g. <code>yourname-project-elm</code>.</li>
+            <li><strong>OAuth Redirect URLs</strong> — <code>http://localhost:3000</code>. The form requires one, but this tool never uses it — the Device Code Flow it uses has no redirect step.</li>
+            <li><strong>Category</strong> — <em>Application Integration</em> (or <em>Other</em>).</li>
+            <li><strong>Client Type</strong> — <strong>Public</strong>. This is the important one: a Public app has no client secret, which is exactly what a local tool needs.</li>
+          </ul>
+        </li>
+        <li>Click <strong>Create</strong>, open the app, and copy its <strong>Client ID</strong>.</li>
+      </ol>
+      <div class="callout">
+        <span class="glyph">ℹ️</span>
+        <p>The Client ID is public by design — on its own it can't access anyone's account. Every real action still requires you to log in and explicitly consent (step 4). That's why it lives in a local, gitignored <code>.env</code> rather than being hardcoded: each user brings their own.</p>
+      </div>
+    </li>
+
+    <li>
+      <h3>Configure</h3>
+      <pre><code>cp .env.example .env
+# edit .env and set:
+# TWITCH_CLIENT_ID=&lt;your Client ID&gt;</code></pre>
+    </li>
+
+    <li>
+      <h3>Run it</h3>
+      <pre><code>node render/server.mjs</code></pre>
+      <p>Open <a href="http://localhost:8080/">http://localhost:8080/</a>. On first run you'll see the login screen:</p>
+      <figure class="shot-figure">
+        <div class="shot">
+          <img class="shot-themed" data-dark="assets/img/login-dark.jpg" data-light="assets/img/login-light.jpg" alt="Project Elm's first-run screen, showing a single “Log in with Twitch” button.">
+          <noscript><img src="assets/img/login-dark.jpg" alt="Project Elm's first-run screen, showing a single “Log in with Twitch” button."></noscript>
+        </div>
+      </figure>
+      <p>Click <strong>Log in with Twitch</strong> — a device code and URL appear on the page. Open the URL, enter the code, sign in with your <strong>channel account</strong>, and approve the <em>manage clips</em> permission (scope <code>channel:manage:clips</code> — required to download your own clips). The token is cached locally in <code>render/.token.json</code> (gitignored) and refreshes itself; you won't need to log in again.</p>
+    </li>
+  </ol>
+
+  <div class="callout warn">
+    <span class="glyph">⚠️</span>
+    <p>Downloaded clips, your Twitch token, and saved reel configurations are all stored locally and gitignored — nothing here is uploaded anywhere except the download itself, which comes straight from Twitch's official endpoint.</p>
+  </div>
+
+  <div class="hero-ctas" style="justify-content:flex-start;">
+    <a class="btn primary" href="usage.html">Next: how to use it →</a>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="bar">
+      <span class="brandlink">
+        <img class="mark" src="assets/daydream-mark.svg" alt="">
+        Daydream Software
+      </span>
+      <span>·</span>
+      <span>Project Elm</span>
+      <span>·</span>
+      <span>© 2026 Daydream Software</span>
+      <span>·</span>
+      <a href="https://github.com/daydream-software/project-elm/blob/main/LICENSE">MIT License</a>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/theme.js"></script>
+</body>
+</html>

@@ -16,10 +16,21 @@ const SEL_KEY = 'elm.selected', ORDER_KEY = 'elm.order', HIDDEN_KEY = 'elm.hidde
 try { const a = JSON.parse(localStorage.getItem(SEL_KEY) || '[]'); if (Array.isArray(a)) sequence = a; } catch {}
 try { JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]').forEach(id => hidden.add(id)); } catch {}
 loadedConfigId = localStorage.getItem(LOADED_KEY) || null;
+/** Persist `sequence` (the included clip ids, in play order) to localStorage. */
 const saveSel = () => { try { localStorage.setItem(SEL_KEY, JSON.stringify(sequence)); } catch {} };
+/** Persist the `hidden` set to localStorage. */
 const saveHidden = () => { try { localStorage.setItem(HIDDEN_KEY, JSON.stringify([...hidden])); } catch {} };
+/** Whether a clip id is currently included in the reel. */
 const isIncluded = (id) => sequence.includes(id);
 
+/**
+ * Fetch JSON from the local server, throwing with the server's error message on failure.
+ *
+ * @param {string} path
+ * @param {RequestInit} [opts]
+ * @returns {Promise<object>} Parsed JSON body (`{}` if the response has none).
+ * @throws {Error} With the server's `error` field, or `'HTTP <status>'`.
+ */
 async function api(path, opts) {
   const r = await fetch(path, opts);
   const j = await r.json().catch(() => ({}));
@@ -27,12 +38,21 @@ async function api(path, opts) {
   return j;
 }
 
+/** Escape a string for safe interpolation into `innerHTML`. */
 const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+/** Format a duration in seconds as `m:ss`, or `Ns` under a minute. */
 const fmtDur = (s) => { s = Math.round(s || 0); const m = Math.floor(s / 60); return m ? `${m}:${String(s % 60).padStart(2, '0')}` : `${s}s`; };
+/** Format a view count with thousands separators. */
 const fmtViews = (n) => Number(n || 0).toLocaleString('en-US');
+/** Format an ISO date string as a short localized date, or `''` if invalid/absent. */
 const fmtDate = (iso) => { try { return new Date(iso).toLocaleDateString('en-US'); } catch { return ''; } };
 
 /* ---- Views ---- */
+/**
+ * Show the login screen in a given sub-state.
+ *
+ * @param {'idle'|'code'|'setup'} mode
+ */
 function showLogin(mode) {
   $('login').hidden = false; $('filterOptionsBar').hidden = true; $('grid').innerHTML = '';
   $('sequence').hidden = true; $('catalogBar').hidden = true;
@@ -41,6 +61,7 @@ function showLogin(mode) {
   $('login-code').hidden = mode !== 'code';
   $('login-setup').hidden = mode !== 'setup';
 }
+/** Show the main curation app (hides the login screen). */
 function showApp() {
   $('login').hidden = true; $('filterOptionsBar').hidden = false;
   $('catalogBar').hidden = false; $('sequence').hidden = false;
@@ -48,6 +69,7 @@ function showApp() {
 }
 
 /* ---- Login (device code) ---- */
+/** Kick off device-code login, show the code/URL, and poll until it's authorized. */
 async function doLogin() {
   try {
     const { verification_uri, user_code } = await api('/api/login', { method: 'POST' });
@@ -64,6 +86,7 @@ async function doLogin() {
 /* ---- Clips ---- */
 // Always fetches the FULL catalog (no days/first/all params — those are now pure
 // client-side filters in render(), applied instantly with no round-trip; see below).
+/** Fetch the full clip catalog and re-render the grid. */
 async function loadClips() {
   $('status').textContent = 'Loading…';
   try {
@@ -80,11 +103,13 @@ async function loadClips() {
 /* ---- Local clip catalog: status line + "Update from Twitch" (SSE progress) ----
    Browsing/curating always reads the catalog (loadClips above) — this is the only
    action that talks to Twitch's clip listing directly. */
+/** Update the "catalog last updated" status line. */
 function updateCatalogStatus(updatedAt) {
   $('catalogStatus').textContent = updatedAt
     ? `Catalog updated ${new Date(updatedAt).toLocaleString()}`
     : 'Catalog never updated — click Update to pull your clips from Twitch';
 }
+/** Trigger a full catalog refresh from Twitch, tracking progress over SSE. */
 function refreshCatalog() {
   const btn = $('catalogUpdate');
   btn.disabled = true;
@@ -126,6 +151,12 @@ function refreshCatalog() {
 // already-loaded catalog — no fetch, applied instantly on every change (see init()'s
 // event wiring). Shared by render() and the bulk actions (Download all/Include all),
 // which should act on what's currently shown, not silently reach into the full catalog.
+/**
+ * The clips currently visible in the grid, after the Period/Max/search/Show-hidden
+ * filters (pure client-side, over the already-loaded `clips` array).
+ *
+ * @returns {object[]}
+ */
 function visibleClips() {
   const showHidden = $('showHidden').checked;
   const q = $('clipSearch').value.trim().toLowerCase();
@@ -141,6 +172,7 @@ function visibleClips() {
 // outside-click/Escape closers below — closing through ONE function means opening
 // either dropdown always closes the other (they used to each close only their own
 // kind, so a kebab menu and the config-switch menu could both stay open at once).
+/** Close every open kebab/config-switch dropdown menu. */
 function closeAllMenus() {
   document.querySelectorAll('.kebab-menu').forEach(m => m.hidden = true);
   document.querySelectorAll('.kebab').forEach(k => k.classList.remove('open'));
@@ -148,6 +180,7 @@ function closeAllMenus() {
   $('cfgSwitchBtn').setAttribute('aria-expanded', 'false');
 }
 
+/** Re-render the clip grid (and, in turn, the reel panel + status line) from current state. */
 function render() {
   const grid = $('grid');
   const q = $('clipSearch').value.trim().toLowerCase();
@@ -229,6 +262,12 @@ function render() {
   updateActions();
 }
 
+/**
+ * Include or exclude a clip from the reel, updating its card and the reel panel.
+ *
+ * @param {string} id - Clip id.
+ * @param {boolean} on - Whether it should be included.
+ */
 function setInclude(id, on) {
   if (on) { if (!sequence.includes(id)) sequence.push(id); }
   else { const i = sequence.indexOf(id); if (i >= 0) sequence.splice(i, 1); }
@@ -243,6 +282,12 @@ function setInclude(id, on) {
   updateActions();
 }
 
+/**
+ * Toggle whether a clip is hidden (never featured). Hiding also drops it from the
+ * reel; unhiding does not re-add it.
+ *
+ * @param {string} id - Clip id.
+ */
 function toggleHidden(id) {
   if (hidden.has(id)) {
     hidden.delete(id);
@@ -254,6 +299,7 @@ function toggleHidden(id) {
   render();
 }
 
+/** Update the status line (download/hidden/orphaned counts) and the config dirty-dot. */
 function updateActions() {
   saveSel();
   const dl = clips.filter(c => c.downloaded).length;
@@ -268,6 +314,7 @@ function updateActions() {
 // Channel/Game are sub-parts of the title-card lower third, not independent overlay
 // elements — disable (don't clear) them while Title card is off, so their value survives
 // for whenever it's turned back on.
+/** Enable/disable the Channel and Game toggles to match whether Title card is on. */
 function syncOnscreenToggles() {
   const on = $('showTitle').checked;
   $('showChannel').disabled = !on;
@@ -280,6 +327,14 @@ function syncOnscreenToggles() {
 // comparator functions means the actual sort RULE only lives server-side; this stays
 // in sync automatically instead of needing a matching edit in two files.
 let ORDER_FIELDS = {};
+/**
+ * Build a comparator function from an {@link ORDER_FIELDS} entry (mirrors
+ * server.mjs's `buildComparator` — see the comment above for why this is a small,
+ * deliberate duplication rather than a shared sort RULE).
+ *
+ * @param {string} mode
+ * @returns {?((a: object, b: object) => number)}
+ */
 function buildComparator(mode) {
   const f = ORDER_FIELDS[mode];
   if (!f) return null;
@@ -290,6 +345,7 @@ function buildComparator(mode) {
 
 /* ---- Your reel: always visible (previously this only existed when Order = Custom, so
    there was no way to see your included clips as a list in Random/Views/Recent/Oldest). ---- */
+/** Re-render the "Your reel" side panel (count/duration + the ordered clip list). */
 function renderSequence() {
   const custom = $('order').value === 'custom';
   // Random genuinely has no fixed play order — the overlay reshuffles every loop — so
@@ -333,6 +389,13 @@ function renderSequence() {
 
 // Single-column list (the reel is a narrow side panel, not a wrapping multi-row strip) —
 // insertion point is just the first tile whose vertical centre is past the pointer.
+/**
+ * Find the tile a dragged item should be inserted before, for a given pointer Y.
+ *
+ * @param {HTMLElement} container - The `#seq-list` element.
+ * @param {number} y - Pointer client Y.
+ * @returns {?HTMLElement} The tile to insert before, or `null` to insert at the end.
+ */
 function getDragAfterElement(container, y) {
   const tiles = [...container.querySelectorAll('.seq-tile:not(.dragging)')];
   return tiles.find(t => {
@@ -343,13 +406,19 @@ function getDragAfterElement(container, y) {
 
 let dragId = null;   // id of the tile currently being dragged
 
+/** Clear the drop-position indicator (the `.drop-before` bar / `.drop-at-end` state). */
 const clearDropMarker = (list) => {
   list.querySelectorAll('.drop-before').forEach(el => el.classList.remove('drop-before'));
   list.classList.remove('drop-at-end');
 };
 
-/* Reorder `sequence` so `id` lands before `beforeId` (or at the end when null).
-   Runs on drop only — the tiles never move mid-drag, so there is no reflow flicker. */
+/**
+ * Reorder `sequence` so `id` lands before `beforeId` (or at the end when `null`).
+ * Runs on drop only — the tiles never move mid-drag, so there is no reflow flicker.
+ *
+ * @param {?string} id - Id of the dragged tile.
+ * @param {?string} beforeId - Id of the tile to insert before, or `null` for the end.
+ */
 function commitReorder(id, beforeId) {
   if (!id) return;
   const visible = [...$('seq-list').querySelectorAll('.seq-tile')].map(t => t.dataset.id);
@@ -365,6 +434,7 @@ function commitReorder(id, beforeId) {
   updateActions();
 }
 
+/** Wire up native HTML5 drag-and-drop reordering on the `#seq-list` reel panel. */
 function initDrag() {
   const list = $('seq-list');
   list.addEventListener('dragstart', e => {
@@ -398,6 +468,11 @@ function initDrag() {
   });
 }
 
+/**
+ * Download one clip, auto-including it in the reel (unless hidden), and refresh the grid.
+ *
+ * @param {string} id - Clip id.
+ */
 async function downloadOne(id) {
   $('status').textContent = 'Downloading…';
   try {
@@ -407,6 +482,7 @@ async function downloadOne(id) {
   } catch (e) { $('status').textContent = '⚠ ' + e.message; }
 }
 
+/** Download every currently-visible, not-yet-downloaded, non-hidden clip. */
 async function downloadAll() {
   const ids = visibleClips().filter(c => !c.downloaded && !hidden.has(c.id)).map(c => c.id);
   if (!ids.length) { $('status').textContent = 'Nothing to download.'; return; }
@@ -417,6 +493,12 @@ async function downloadAll() {
   } catch (e) { $('status').textContent = '⚠ ' + e.message; }
 }
 
+/**
+ * Delete a clip's local download after confirmation (final if the clip is orphaned —
+ * no longer on Twitch).
+ *
+ * @param {string} id - Clip id.
+ */
 async function deleteDownload(id) {
   const c = clips.find(x => x.id === id);
   const msg = c && c.orphaned
@@ -432,6 +514,12 @@ async function deleteDownload(id) {
 }
 
 /* ---- Clip preview (popup overlay, same window) ---- */
+/**
+ * Open the preview popup for a clip: plays the local mp4 if downloaded, else falls
+ * back to the official Twitch embed.
+ *
+ * @param {object} c - Clip.
+ */
 function openPreview(c) {
   const body = $('previewBody');
   $('previewTitle').textContent = c.title || '(untitled)';
@@ -445,6 +533,7 @@ function openPreview(c) {
   }
   $('previewOverlay').hidden = false;
 }
+/** Close the preview popup and stop playback (drops the `<video>`/`<iframe>`). */
 function closePreview() {
   $('previewOverlay').hidden = true;
   $('previewBody').innerHTML = '';   // drop the video/iframe so playback actually stops
@@ -460,6 +549,13 @@ function closePreview() {
    metadata) get it straight from the server instead of regenerating every time.
    onerror is kept too, as a plain safety net for thumbnails that genuinely fail to load. */
 const thumbRegenAttempted = new Set();   // per-page-load: only try once per clip id
+/**
+ * Grab a frame from a downloaded clip's local mp4 and upload it as that clip's
+ * fallback thumbnail (see the block comment above for why this exists). No-op past
+ * the first attempt per clip id per page load.
+ *
+ * @param {string} id - Clip id.
+ */
 async function ensureHomemadeThumbnail(id) {
   if (thumbRegenAttempted.has(id)) return;
   thumbRegenAttempted.add(id);
@@ -483,29 +579,44 @@ async function ensureHomemadeThumbnail(id) {
     await api('/api/thumbnail', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, dataUrl }) });
   } catch { /* leave whatever thumbnail is already showing — nothing more we can do */ }
 }
+/**
+ * `onerror` handler for a clip's `<img>` thumbnail: marks it visually broken and, if
+ * the clip is downloaded, kicks off a homemade fallback thumbnail.
+ *
+ * @param {HTMLImageElement} img
+ */
 function handleThumbError(img) {
   img.closest('.thumb').classList.add('thumb-broken');
   const c = clips.find(x => x.id === img.dataset.id);
   if (c && c.downloaded) ensureHomemadeThumbnail(img.dataset.id);
 }
 
+/** Open the loaded configuration's live overlay URL in a new tab. */
 function openOverlay() {
   if (!loadedConfigId) { alert('Save this as a configuration first, then open its overlay.'); return; }
   window.open(`/overlay/?config=${encodeURIComponent(loadedConfigId)}`, '_blank');
 }
 
 /* ---- Saved configurations (flyout) ---- */
+/** Open the "manage all configurations" flyout panel. */
 function openConfigsFlyout() {
   const el = $('configsFlyout');
   el.hidden = false;
   requestAnimationFrame(() => el.classList.add('open'));
 }
+/** Close the configurations flyout panel (matches its CSS slide-out transition). */
 function closeConfigsFlyout() {
   const el = $('configsFlyout');
   el.classList.remove('open');
   setTimeout(() => { el.hidden = true; }, 200);   // matches the CSS slide transition
 }
 
+/**
+ * Set which configuration is currently loaded (or `null` for a new/unsaved draft),
+ * updating the topbar quick-switch and the config-switch menu to match.
+ *
+ * @param {?string} id
+ */
 function setLoadedConfig(id) {
   loadedConfigId = id;
   try { id ? localStorage.setItem(LOADED_KEY, id) : localStorage.removeItem(LOADED_KEY); } catch {}
@@ -524,13 +635,16 @@ let savedSnapshot = null;
 // is loaded and setting savedSnapshot — without this guard that reads as "dirty"
 // against a not-yet-set null snapshot and flashes the dot for an unedited config.
 let configsReady = false;
+/** A JSON snapshot of the current reel state, comparable against `savedSnapshot`. */
 const snapshotNow = () => JSON.stringify([sequence, $('order').value, $('showTitle').checked, $('showChannel').checked, $('showGame').checked]);
+/** Toggle the topbar's unsaved-changes dot based on `snapshotNow()` vs `savedSnapshot`. */
 function refreshCfgDirty() {
   if (!configsReady) return;
   const dirty = loadedConfigId ? snapshotNow() !== savedSnapshot : sequence.length > 0;
   $('cfgDot').classList.toggle('show', dirty);
 }
 
+/** Fetch the list of saved configurations and re-render the menu/flyout list. */
 async function loadConfigs() {
   try {
     const data = await api('/api/configs');
@@ -540,6 +654,7 @@ async function loadConfigs() {
   } catch (e) { $('status').textContent = '⚠ ' + e.message; }
 }
 
+/** Re-render the topbar config-switch dropdown menu. */
 function renderCfgMenu() {
   const list = $('cfgMenuList');
   list.innerHTML = configs.length
@@ -548,6 +663,7 @@ function renderCfgMenu() {
   list.querySelectorAll('.cfg-item').forEach(btn => btn.addEventListener('click', () => { $('cfgMenu').hidden = true; loadConfig(btn.dataset.id); }));
 }
 
+/** Re-render the full configurations flyout list (filtered by its search box). */
 function renderConfigList() {
   const list = $('configList');
   const q = $('configSearch').value.trim().toLowerCase();
@@ -574,6 +690,11 @@ function renderConfigList() {
   }
 }
 
+/**
+ * Load a saved configuration into the editor (sequence, order, on-overlay toggles).
+ *
+ * @param {string} id - Config id.
+ */
 function loadConfig(id) {
   const c = configs.find(x => x.id === id);
   if (!c) return;
@@ -598,6 +719,7 @@ function loadConfig(id) {
   $('status').textContent = `Loaded "${c.name}".`;
 }
 
+/** Save the current reel state as the loaded configuration (or create a new one). */
 async function saveConfigNow() {
   const name = $('configName').value.trim();
   if (!name) {
@@ -632,6 +754,7 @@ async function saveConfigNow() {
   } catch (e) { $('status').textContent = '⚠ ' + e.message; }
 }
 
+/** Detach from the loaded configuration and start editing a new (unsaved) one. */
 function newConfig() {
   setLoadedConfig(null);
   $('configName').value = '';
@@ -640,6 +763,11 @@ function newConfig() {
   $('status').textContent = 'Editing a new (unsaved) configuration.';
 }
 
+/**
+ * Save a copy of an existing configuration under a "(copy)" name.
+ *
+ * @param {string} id - Config id to duplicate.
+ */
 async function duplicateConfig(id) {
   const c = configs.find(x => x.id === id);
   if (!c) return;
@@ -652,6 +780,11 @@ async function duplicateConfig(id) {
   } catch (e) { $('status').textContent = '⚠ ' + e.message; }
 }
 
+/**
+ * Delete a configuration after confirmation.
+ *
+ * @param {string} id - Config id.
+ */
 async function deleteConfigItem(id) {
   const c = configs.find(x => x.id === id);
   if (!confirm(`Delete configuration "${c ? c.name : id}"? Any overlay open on it will stop updating.`)) return;
@@ -663,6 +796,7 @@ async function deleteConfigItem(id) {
 }
 
 /* ---- Init ---- */
+/** Wire up all UI event listeners and load initial state (auth status, clips, configs). */
 async function init() {
   $('login-btn').addEventListener('click', doLogin);
   // Period/Max/Load-all are pure client-side filters (see visibleClips()) — apply

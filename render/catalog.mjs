@@ -12,13 +12,31 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as tw from './twitch.mjs';
+import { readJson, writeJson } from './json-store.mjs';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const CATALOG_FILE = path.join(DIR, 'catalog.json');
 
-/* One-time migration: this repo used to cache metadata in a per-clip <id>.json sidecar
- * next to each mp4. Fold any of those into the catalog on first load, then remove them
- * — after this, the catalog is the only place clip metadata lives. */
+/**
+ * @typedef {object} CatalogEntry
+ * @property {string} title
+ * @property {string} game
+ * @property {number} views
+ * @property {number} duration
+ * @property {string} createdAt - ISO timestamp.
+ * @property {string} thumbnail - Twitch's thumbnail URL template.
+ * @property {string} broadcaster
+ * @property {boolean} missing - True once Twitch stops returning this clip on refresh
+ *   (kept only as long as its mp4 is still downloaded).
+ */
+
+/**
+ * One-time migration: this repo used to cache metadata in a per-clip `<id>.json`
+ * sidecar next to each mp4. Fold any of those into the catalog on first load, then
+ * remove them — after this, the catalog is the only place clip metadata lives.
+ *
+ * @returns {Record<string, CatalogEntry>} Clips recovered from sidecars.
+ */
 function migrateLegacySidecars() {
   const dir = tw.CLIPS_DIR;
   if (!fs.existsSync(dir)) return {};
@@ -26,15 +44,15 @@ function migrateLegacySidecars() {
   for (const f of fs.readdirSync(dir)) {
     if (!f.endsWith('.json')) continue;
     const full = path.join(dir, f);
-    try {
-      const m = JSON.parse(fs.readFileSync(full, 'utf8'));
+    const m = readJson(full);
+    if (m) {
       // missing:false, not true — we haven't actually checked Twitch yet, so treat the
       // clip as present until a real refresh() proves otherwise (see refresh() below).
       clips[f.slice(0, -5)] = {
         title: m.title, game: m.game, views: m.views, duration: m.duration,
         createdAt: m.createdAt, thumbnail: m.thumbnail, broadcaster: m.broadcaster, missing: false,
       };
-    } catch { /* unreadable sidecar — nothing worth carrying forward */ }
+    } // unreadable sidecar — nothing worth carrying forward
     fs.unlinkSync(full);
   }
   return clips;
@@ -44,26 +62,40 @@ function migrateLegacySidecars() {
 // web server are separate processes that can both touch catalog.json, and a stale
 // in-memory copy in one would clobber the other's writes on its next save(). The file
 // is small (plain clip metadata, not video) so re-reading it every call costs nothing.
+/**
+ * Load the catalog file, migrating legacy sidecars and creating it fresh if it
+ * doesn't exist yet.
+ *
+ * @returns {{updatedAt: ?string, clips: Record<string, CatalogEntry>}}
+ */
 function load() {
-  if (fs.existsSync(CATALOG_FILE)) {
-    try { return JSON.parse(fs.readFileSync(CATALOG_FILE, 'utf8')); } catch { /* rebuild below */ }
-  }
+  const cat = readJson(CATALOG_FILE);
+  if (cat) return cat;
   const clips = migrateLegacySidecars();
   const fresh = { updatedAt: null, clips };
   if (Object.keys(clips).length) save(fresh);
   return fresh;
 }
 function save(catalog) {
-  fs.writeFileSync(CATALOG_FILE, JSON.stringify(catalog, null, 2));
+  writeJson(CATALOG_FILE, catalog);
 }
 
+/** Every cataloged clip, keyed by id. */
 export const getAll = () => load().clips;
+/** A single cataloged clip, or `null` if unknown. */
 export const getEntry = (id) => load().clips[id] || null;
+/** ISO timestamp of the last full {@link refresh}, or `null` if it's never run. */
 export const lastUpdated = () => load().updatedAt;
 
-/** The subset of a Helix clip object (or a resolved game name) worth keeping in the
- *  catalog — the one place this mapping is defined, shared by refresh() and every
- *  caller that upserts a clip right after downloading it. */
+/**
+ * The subset of a Helix clip object (or a resolved game name) worth keeping in the
+ * catalog — the one place this mapping is defined, shared by {@link refresh} and every
+ * caller that upserts a clip right after downloading it.
+ *
+ * @param {object} clip - A Helix clip object.
+ * @param {string} [gameName] - Resolved game name for `clip.game_id`.
+ * @returns {Omit<CatalogEntry, 'missing'>}
+ */
 export function fromHelixClip(clip, gameName) {
   return {
     title: clip.title, game: gameName || '', views: clip.view_count, duration: clip.duration,
@@ -71,16 +103,25 @@ export function fromHelixClip(clip, gameName) {
   };
 }
 
-/** Record/refresh one clip's metadata — called right after a successful download so a
- *  clip is in the catalog immediately, without waiting for the next full refresh. */
+/**
+ * Record/refresh one clip's metadata — called right after a successful download so a
+ * clip is in the catalog immediately, without waiting for the next full refresh.
+ *
+ * @param {string} id - Clip id.
+ * @param {Partial<CatalogEntry>} fields - Fields to merge in (see {@link fromHelixClip}).
+ */
 export function upsert(id, fields) {
   const cat = load();
   cat.clips[id] = { ...(cat.clips[id] || {}), ...fields, missing: false };
   save(cat);
 }
 
-/** Drop a clip from the catalog entirely. Only meaningful once BOTH the local file and
- *  the Twitch original are gone — nothing left worth tracking it for. */
+/**
+ * Drop a clip from the catalog entirely. Only meaningful once BOTH the local file and
+ * the Twitch original are gone — nothing left worth tracking it for.
+ *
+ * @param {string} id - Clip id.
+ */
 export function forget(id) {
   const cat = load();
   if (!(id in cat.clips)) return;
@@ -88,11 +129,17 @@ export function forget(id) {
   save(cat);
 }
 
-/** Full resync: paginate every clip Twitch has for this broadcaster (all-time — a
- *  catalog is only useful if it's complete) and diff against what we already knew.
- *  A previously-known clip Twitch no longer returns is kept (metadata intact) and
- *  flagged `missing` IF its mp4 is still downloaded; otherwise it's dropped, since
- *  there's nothing left to preserve it for. onProgress({fetched, page}) fires per page. */
+/**
+ * Full resync: paginate every clip Twitch has for this broadcaster (all-time — a
+ * catalog is only useful if it's complete) and diff against what we already knew.
+ * A previously-known clip Twitch no longer returns is kept (metadata intact) and
+ * flagged `missing` IF its mp4 is still downloaded; otherwise it's dropped, since
+ * there's nothing left to preserve it for.
+ *
+ * @param {(progress: {fetched: number, page: number}) => void} [onProgress] - Fires
+ *   per page, forwarded from {@link module:twitch.listAllClips}.
+ * @returns {Promise<{total: number, added: number, updated: number, newlyMissing: number, dropped: number}>}
+ */
 export async function refresh(onProgress = () => {}) {
   const cat = load();
   const fresh = await tw.listAllClips(onProgress);

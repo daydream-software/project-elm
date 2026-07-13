@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project Elm — Twitch highlight reels for OBS</title>
+<meta name="description" content="Pick your Twitch clips, download them once, then play a live crossfading highlight reel in OBS or render one MP4 — a local, no-hosted-service tool by Daydream Software.">
+<link rel="icon" href="assets/daydream-mark.svg">
+<script>
+  /* Apply theme before paint (no flash). Dark = no attribute; light = data-theme. */
+  (function () { try { var m = localStorage.getItem('elm-docs.theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'); if (m === 'light') document.documentElement.setAttribute('data-theme', 'light'); } catch (e) {} })();
+</script>
+<link rel="stylesheet" href="assets/css/site.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap">
+    <div class="bar">
+      <a class="brand" href="index.html">
+        <img class="mark" src="assets/daydream-mark.svg" alt="">
+        <span>Project Elm</span>
+      </a>
+      <nav class="nav">
+        <button id="theme-toggle" class="icon-btn" type="button" title="Toggle theme" aria-label="Toggle theme">
+          <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.5 6.5 0 0 0 9.8 9.8z"/></svg>
+          <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.4 1.4M17.2 17.2L18.6 18.6M18.6 5.4L17.2 6.8M6.8 17.2L5.4 18.6"/></svg>
+        </button>
+        <a href="index.html" aria-current="page">Overview</a>
+        <a href="install.html">Install</a>
+        <a href="usage.html">Usage</a>
+        <a class="cta" href="https://github.com/daydream-software/project-elm">GitHub ↗</a>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="hero">
+    <span class="eyebrow">Local tool · MIT · by Daydream Software</span>
+    <h1>Turn your Twitch clips<br>into a <span class="accent">highlight reel</span></h1>
+    <p class="lead">
+      Pick your clips in a web UI, download them via the official Twitch API, then either
+      play them <strong>live in OBS</strong> — crossfades, autoplay, sound on — or
+      <strong>render one MP4</strong> to upload anywhere.
+    </p>
+    <div class="hero-ctas">
+      <a class="btn primary" href="install.html">Get started →</a>
+      <a class="btn" href="usage.html">See how it works</a>
+    </div>
+
+    <div class="shot">
+      <img class="shot-themed" data-dark="assets/img/curate-main-dark.jpg" data-light="assets/img/curate-main-light.jpg" alt="Project Elm selection UI: a grid of clip cards with download/hide/preview actions, and a “Your reel” side panel showing the included clips in play order.">
+      <noscript><img src="assets/img/curate-main-dark.jpg" alt="Project Elm selection UI: a grid of clip cards with download/hide/preview actions, and a “Your reel” side panel showing the included clips in play order."></noscript>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="diagram">
+      <div class="step">
+        <div class="n">1</div>
+        <h3>Log in &amp; curate</h3>
+        <p>Log in with Twitch once. Browse your clips, download the ones you want, hide the rest, and set your play order.</p>
+      </div>
+      <div class="step">
+        <div class="n">2</div>
+        <h3>Download via the official API</h3>
+        <p>Clips are pulled through Twitch's own Get Clips Download endpoint — no scraping, no client secret required.</p>
+      </div>
+      <div class="step">
+        <div class="n">3</div>
+        <h3>Play it two ways</h3>
+        <p>Open the live crossfade overlay as an OBS Browser Source, or render one loudness-normalized MP4 to upload.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="features">
+    <h2>What it does</h2>
+    <p class="sub">Everything runs on your own machine — no hosted backend, no account but your own Twitch login.</p>
+    <div class="grid">
+      <div class="card">
+        <div class="icon">🎬</div>
+        <h3>Fine-grained curation</h3>
+        <p>Search by title or game, hide clips you'll never feature, delete a stale download — all reversible, all separate actions.</p>
+      </div>
+      <div class="card">
+        <div class="icon">🧩</div>
+        <h3>Drag-and-drop ordering</h3>
+        <p>Random, by views, most recent/oldest, or a fully custom order you set by dragging tiles in the reel panel.</p>
+      </div>
+      <div class="card">
+        <div class="icon">💾</div>
+        <h3>Saved configurations</h3>
+        <p>Save as many named reels as you like ("Highlights", "Fails"…) — each gets its own stable overlay URL.</p>
+      </div>
+      <div class="card">
+        <div class="icon">📡</div>
+        <h3>Live, zero-refresh overlay</h3>
+        <p>Editing a saved reel updates any open OBS source instantly over SSE — no Browser Source refresh, ever.</p>
+      </div>
+      <div class="card">
+        <div class="icon">🎚️</div>
+        <h3>Loudness-normalized render</h3>
+        <p>Prefer a fixed file? Render one MP4 with crossfade transitions and per-clip loudness normalization.</p>
+      </div>
+      <div class="card">
+        <div class="icon">🔒</div>
+        <h3>100% local, no lock-in</h3>
+        <p>A Public Twitch app (no secret) plus Node.js. Your clips and configs never leave your machine.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>See it in OBS</h2>
+    <p class="sub">The overlay autoplays with sound the moment its Browser Source goes live, and crossfades cleanly between clips.</p>
+    <figure class="shot-figure">
+      <div class="shot">
+        <img src="assets/img/overlay-lowerthird.jpg" alt="The live overlay playing a clip full-screen, with a lower-third title card showing the clip title, game, and channel name.">
+      </div>
+      <figcaption>The overlay's lower-third — title, game, and channel are all optional toggles.</figcaption>
+    </figure>
+    <div class="hero-ctas" style="justify-content:flex-start; margin-bottom:0;">
+      <a class="btn primary" href="install.html">Install it →</a>
+      <a class="btn" href="usage.html">Read the full usage guide</a>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="bar">
+      <span class="brandlink">
+        <img class="mark" src="assets/daydream-mark.svg" alt="">
+        Daydream Software
+      </span>
+      <span>·</span>
+      <span>Project Elm</span>
+      <span>·</span>
+      <span>© 2026 Daydream Software</span>
+      <span>·</span>
+      <a href="https://github.com/daydream-software/project-elm/blob/main/LICENSE">MIT License</a>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/theme.js"></script>
+</body>
+</html>

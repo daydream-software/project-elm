@@ -4,21 +4,25 @@
  *   node render/cli/fetch-clips.mjs list [--days N] [--first N]
  *   node render/cli/fetch-clips.mjs pull <all|1,3,5> [--days N] [--first N]
  */
-import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as tw from '../twitch.mjs';
 import * as catalog from '../catalog.mjs';
+import { readJsonStrict, writeJson } from '../json-store.mjs';
+import { die } from '../cli-util.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const die = (m) => { console.error('✗ ' + m); process.exit(1); };
+/** Format a duration in seconds as `m:ss`, or `Ns` under a minute. */
 const fmtDur = (s) => { s = Math.round(s || 0); const m = Math.floor(s / 60); return m ? `${m}:${String(s % 60).padStart(2, '0')}` : `${s}s`; };
 const LIST_FILE = path.join(HERE, '.last-clips.json');
-const saveList = (c) => fs.writeFileSync(LIST_FILE, JSON.stringify(c));
-const loadList = () => (fs.existsSync(LIST_FILE) ? JSON.parse(fs.readFileSync(LIST_FILE, 'utf8')) : null);
+const saveList = (c) => writeJson(LIST_FILE, c);
+// Strict, not tolerant-of-corruption: a malformed cache should crash loudly
+// (pull would otherwise silently re-fetch a different/smaller clip set instead).
+const loadList = () => readJsonStrict(LIST_FILE);
 
 const args = process.argv.slice(2);
 const cmd = args[0];
+/** Read a `--name value` CLI flag, or `d` if absent. */
 const flag = (n, d) => { const i = args.indexOf('--' + n); return i >= 0 ? args[i + 1] : d; };
 const days = Number(flag('days', 0)) || 0;
 const first = Number(flag('first', 30));
@@ -67,7 +71,7 @@ try {
       transition: 'fade', transitionMs: 800, showTitles: true,
       clips: chosen.map(c => ({ file: `${c.id}.mp4`, title: c.title })),
     };
-    fs.writeFileSync(path.join(tw.CLIPS_DIR, 'manifest.json'), JSON.stringify(manifest, null, 2));
+    writeJson(path.join(tw.CLIPS_DIR, 'manifest.json'), manifest);
     console.log(`✓ ${chosen.length} selected → ${tw.CLIPS_DIR}`);
     console.log('Render:  node render/render-reel.mjs render/realclips/manifest.json');
 

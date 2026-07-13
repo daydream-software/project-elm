@@ -42,6 +42,13 @@ const ORDER_FIELDS = {
   oldest: { field: 'createdAt', dir: 1, isDate: true },
   custom: null,
 };
+/**
+ * Build a comparator function from an {@link ORDER_FIELDS} entry.
+ *
+ * @param {keyof typeof ORDER_FIELDS} mode
+ * @returns {?((a: object, b: object) => number)} `null` for a mode with no fixed order
+ *   (`custom`, whose order is the incoming sequence itself).
+ */
 function buildComparator(mode) {
   const f = ORDER_FIELDS[mode];
   if (!f) return null;
@@ -60,7 +67,8 @@ const ORDERS = {
   custom: { overlay: 'sequential', sort: null },   // keep the exact incoming id order (drag sequence)
 };
 
-/* Resolve a saved config into what the overlay actually needs: catalog metadata for
+/**
+ * Resolve a saved config into what the overlay actually needs: catalog metadata for
  * its clips, filtered to what's downloaded right now, in the config's play order. Reads
  * the local catalog only — no live Twitch calls — so a clip deleted on Twitch AFTER
  * being downloaded keeps playing (cached title/game/broadcaster) instead of silently
@@ -68,7 +76,11 @@ const ORDERS = {
  * cataloged — see /api/clips) still plays too, just with blank title/game/broadcaster
  * until an Update fills them in. Always recomputed fresh from disk (never cached in
  * memory) so an overlay re-fetching this after an SSE "update" ping sees the current
- * state. */
+ * state.
+ *
+ * @param {import('./configs.mjs').ReelConfig} config
+ * @returns {{settings: object, clips: object[]}} The overlay playlist payload.
+ */
 function resolvePlaylist(config) {
   const ord = ORDERS[config.order] || ORDERS.random;
   const seq = config.sequence || [];
@@ -90,13 +102,20 @@ function resolvePlaylist(config) {
 /* ---- SSE: notify any open overlay that its configuration changed, so it can
  * re-fetch the playlist and hot-swap without a hard refresh of the OBS source. ---- */
 const subscribers = new Map();   // config id -> Set<ServerResponse>
+/**
+ * Register an SSE response as subscribed to a config id's update notifications.
+ *
+ * @param {string} id - Config id.
+ * @param {import('node:http').ServerResponse} res
+ * @returns {() => void} Call to unsubscribe.
+ */
 function subscribe(id, res) {
   let set = subscribers.get(id);
   if (!set) subscribers.set(id, set = new Set());
-  res._connectedAt = Date.now();   // read by dashboard.mjs to show "connected for…"
   set.add(res);
   return () => { set.delete(res); if (!set.size) subscribers.delete(id); };
 }
+/** Push an "update" event to every overlay subscribed to a config id. */
 function notify(id) {
   const set = subscribers.get(id);
   if (!set) return;
@@ -105,6 +124,7 @@ function notify(id) {
 
 /* ---- SSE: push catalog-refresh progress to the "Update" button's progress bar. ---- */
 const catalogSubscribers = new Set();
+/** Broadcast a JSON payload to every client watching catalog-refresh progress. */
 function catalogBroadcast(obj) {
   const line = `data: ${JSON.stringify(obj)}\n\n`;
   for (const res of catalogSubscribers) res.write(line);
@@ -116,7 +136,30 @@ let catalogRefreshing = false;
  * recent request activity (which fires just as easily for a stray curl). ---- */
 const uiSubscribers = new Set();
 
-/* Kick off device-code login; resolve once we have the code (polling continues). */
+/**
+ * Open an SSE stream on `res`: sends the headers + an initial comment, timestamps the
+ * connection (read by dashboard.mjs for "connected for…"), and keeps it alive with a
+ * heartbeat comment every 25s. Callers still add their own `req.on('close', ...)` to
+ * remove `res` from whatever subscriber set they're using — this only owns the
+ * SSE handshake and the heartbeat's own cleanup.
+ *
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ */
+function openSSE(req, res) {
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
+  res.write(':ok\n\n');
+  res._connectedAt = Date.now();   // read by dashboard.mjs to show "connected for…"
+  const heartbeat = setInterval(() => res.write(':hb\n\n'), 25_000);
+  req.on('close', () => clearInterval(heartbeat));
+}
+
+/**
+ * Kick off device-code login; resolves once we have the code (polling continues in
+ * the background via twitch.mjs's `login`).
+ *
+ * @returns {Promise<{verification_uri: string, user_code: string}>}
+ */
 function startLogin() {
   return new Promise((resolve, reject) => {
     tw.login({ onCode: (c) => { LOGIN = { authorized: false, ...c }; resolve(c); } })
@@ -125,16 +168,25 @@ function startLogin() {
   });
 }
 
+/** Send a JSON response with the given status code. */
 const send = (res, status, obj) => {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   res.end(JSON.stringify(obj));
 };
+/** Read a request body to completion as a string (capped at 5MB — aborts the request past that). */
 const readBody = (req) => new Promise((resolve, reject) => {
   let d = ''; req.on('data', c => { d += c; if (d.length > 5e6) req.destroy(); });
   req.on('end', () => resolve(d)); req.on('error', reject);
 });
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.mp4': 'video/mp4', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' };
+/**
+ * Serve a static file from the repo root, defaulting `/` to the curate UI.
+ * Refuses dotfiles/dirs (secrets, `.git`) and any path escaping the repo root.
+ *
+ * @param {import('node:http').ServerResponse} res
+ * @param {string} urlPath - The raw request URL (path + optional query string).
+ */
 function serveStatic(res, urlPath) {
   let rel = decodeURIComponent(urlPath.split('?')[0]);
   if (rel === '/') rel = '/render/curate/index.html';
@@ -236,20 +288,15 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (p === '/api/catalog/events') {
-      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
-      res.write(':ok\n\n');
+      openSSE(req, res);
       catalogSubscribers.add(res);
-      const heartbeat = setInterval(() => res.write(':hb\n\n'), 25_000);
-      req.on('close', () => { clearInterval(heartbeat); catalogSubscribers.delete(res); });
+      req.on('close', () => catalogSubscribers.delete(res));
       return;
     }
     if (p === '/api/ui/presence') {
-      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
-      res.write(':ok\n\n');
-      res._connectedAt = Date.now();   // read by dashboard.mjs
+      openSSE(req, res);
       uiSubscribers.add(res);
-      const heartbeat = setInterval(() => res.write(':hb\n\n'), 25_000);
-      req.on('close', () => { clearInterval(heartbeat); uiSubscribers.delete(res); });
+      req.on('close', () => uiSubscribers.delete(res));
       return;
     }
     if (p === '/api/configs' && req.method === 'GET') {
@@ -286,11 +333,9 @@ const server = http.createServer(async (req, res) => {
       // whenever we push an "update" — the live-reload path, no OBS source refresh needed.
       const id = url.searchParams.get('config');
       if (!id) return send(res, 400, { error: 'config required' });
-      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
-      res.write(':ok\n\n');
+      openSSE(req, res);
       const unsubscribe = subscribe(id, res);
-      const heartbeat = setInterval(() => res.write(':hb\n\n'), 25_000);
-      req.on('close', () => { clearInterval(heartbeat); unsubscribe(); });
+      req.on('close', unsubscribe);
       return;
     }
     return serveStatic(res, req.url);

@@ -28,6 +28,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { die } from './cli-util.mjs';
 
 const FFMPEG = process.env.FFMPEG || 'ffmpeg';
 const FFPROBE = process.env.FFPROBE || 'ffprobe';
@@ -40,19 +41,23 @@ const FONT_CANDIDATES = [
   '/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf',
 ];
 
-const die = (msg) => { console.error('✗ ' + msg); process.exit(1); };
+/** Run a binary and return its stdout as a string, throwing on a non-zero exit. */
 const sh = (bin, args) => execFileSync(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] }).toString();
+/** Run ffmpeg (quiet, always overwriting output), dying with a friendly message on failure. */
 const ff = (args) => {
   try { execFileSync(FFMPEG, ['-y', '-loglevel', 'error', ...args], { stdio: ['ignore', 'ignore', 'inherit'] }); }
   catch { die('ffmpeg failed (see the error above).' + (FFMPEG === 'ffmpeg' ? ' Is ffmpeg on your PATH? Otherwise set FFMPEG/FFPROBE.' : '')); }
 };
 
+/** Probe a media file's duration in seconds (via ffprobe). */
 function probeDuration(file) {
   return parseFloat(sh(FFPROBE, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nk=1:nw=1', file]).trim());
 }
+/** Whether a media file has an audio stream (via ffprobe). */
 function probeHasAudio(file) {
   return sh(FFPROBE, ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', file]).includes('audio');
 }
+/** Whether the ffmpeg binary in use has a given filter compiled in (e.g. `'drawtext'`, which needs libfreetype). */
 function hasFilter(name) {
   try { return sh(FFMPEG, ['-hide_banner', '-filters']).includes(name); } catch { return false; }
 }
@@ -94,6 +99,14 @@ const work = fs.mkdtempSync(path.join(os.tmpdir(), 'reel-'));
 
 /* ---- 1) Normalize each clip (letterbox to canvas, constant fps, stereo audio,
  *         optional title lower-third burned into the clip's first 4 s). ---- */
+/**
+ * Build a `drawtext` filter string burning a clip's title into its first 4s, or
+ * `null` if titles are disabled/unavailable/this clip has none.
+ *
+ * @param {{title?: string}} c - Clip entry from the manifest.
+ * @param {number} i - Clip index (used to name its title textfile uniquely).
+ * @returns {?string}
+ */
 function titleFilter(c, i) {
   if (!showTitles || !font || !c.title) return null;
   const tf = path.join(work, `title-${i}.txt`);
