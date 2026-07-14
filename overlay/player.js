@@ -37,7 +37,7 @@
  * @property {string} [title]
  * @property {string} [game]
  * @property {string} [broadcaster]
- * @property {number} [duration] - Seconds; used only as a fallback for the safety timer.
+ * @property {number} [duration] - Seconds (catalog metadata; not used by the player itself).
  */
 
 /**
@@ -58,6 +58,11 @@ const DEFAULTS = {
   showTitle: true,
   muted: false,
 };
+
+// Stall watchdog (see Player#armSafetyTimer): how often to sample `currentTime`,
+// and how long it must sit frozen before a clip is treated as genuinely stuck.
+const STALL_CHECK_MS = 1000;
+const STALL_LIMIT_MS = 4000;
 
 const els = {
   layerEls: [document.getElementById('layer-a'), document.getElementById('layer-b')],
@@ -103,7 +108,9 @@ function makeLayer(el) {
     el,
     video: el.querySelector('.clip-video'),
     clip: null,
-    timer: null,   // safety advance timer (fires only if the video's own events don't)
+    timer: null,          // stall-watchdog interval (fires only if playback position stops advancing)
+    stallBaseline: 0,     // currentTime observed at the last watchdog tick
+    stalledMs: 0,          // how long currentTime has sat at stallBaseline (ms)
   };
 }
 
@@ -162,7 +169,7 @@ class Player {
    */
   prepare(layer, clip) {
     layer.clip = clip;
-    if (layer.timer) { clearTimeout(layer.timer); layer.timer = null; }
+    this.disarmSafetyTimer(layer);
     layer.video.muted = this.settings.muted;
     layer.video.src = clip.mp4;
     layer.video.load();
@@ -199,18 +206,43 @@ class Player {
 
   /**
    * Fallback advance: if a clip never fires timeupdate/ended (missing or corrupt
-   * MP4), force the transition shortly after its expected duration so the reel
-   * never stalls on a black frame. Healthy clips transition via onTimeUpdate first.
+   * MP4, or a decoder that's genuinely stuck), force the transition so the reel
+   * never stalls on a black/frozen frame. Healthy clips transition via onTimeUpdate
+   * first.
+   *
+   * This is a stall watchdog, not a wall-clock deadline: it polls `currentTime`
+   * and only fires once playback position stops advancing for `STALL_LIMIT_MS`.
+   * A wall-clock timer keyed off catalog duration would fire early whenever
+   * playback merely falls behind real time (e.g. OBS's Browser Source stalling
+   * under GPU/encoder load) even though the clip is still playing fine — cutting
+   * off however much was left unplayed. Watching actual progress instead means a
+   * clip is only ever force-advanced when it's truly not moving.
    *
    * @param {ReturnType<typeof makeLayer>} layer
    */
   armSafetyTimer(layer) {
-    if (layer.timer) clearTimeout(layer.timer);
-    const dur = Number(layer.clip.duration) || 30;
-    const ms = Math.max(500, (dur + 1) * 1000);
-    layer.timer = setTimeout(() => {
-      if (this.front === layer && !this.transitioning) this.beginTransition();
-    }, ms);
+    this.disarmSafetyTimer(layer);
+    layer.stallBaseline = layer.video.currentTime;
+    layer.stalledMs = 0;
+    layer.timer = setInterval(() => this.checkStall(layer), STALL_CHECK_MS);
+  }
+
+  /** @param {ReturnType<typeof makeLayer>} layer */
+  disarmSafetyTimer(layer) {
+    if (layer.timer) { clearInterval(layer.timer); layer.timer = null; }
+  }
+
+  /** @param {ReturnType<typeof makeLayer>} layer */
+  checkStall(layer) {
+    const v = layer.video;
+    if (v.currentTime > layer.stallBaseline) {
+      layer.stallBaseline = v.currentTime;
+      layer.stalledMs = 0;
+      return;
+    }
+    layer.stalledMs += STALL_CHECK_MS;
+    if (layer.stalledMs < STALL_LIMIT_MS) return;
+    if (this.front === layer && !this.transitioning && !this.suspended) this.beginTransition();
   }
 
   /** `timeupdate` handler: begins the crossfade once within `transitionSec` of the end. */
@@ -269,7 +301,7 @@ class Player {
    */
   finalize(from, to, nextPos) {
     from.video.pause();
-    if (from.timer) { clearTimeout(from.timer); from.timer = null; }
+    this.disarmSafetyTimer(from);
     from.el.classList.remove('front');
 
     this.front = to;
@@ -326,7 +358,7 @@ class Player {
     this.suspended = true;
     for (const layer of this.layers) {
       layer.video.pause();
-      if (layer.timer) { clearTimeout(layer.timer); layer.timer = null; }
+      this.disarmSafetyTimer(layer);
     }
     this.resetToStart();
   }
@@ -366,7 +398,7 @@ class Player {
       layer.video.removeEventListener('ended', onEnd);
       layer.video.removeEventListener('error', onErr);
       layer.video.pause();
-      if (layer.timer) { clearTimeout(layer.timer); layer.timer = null; }
+      this.disarmSafetyTimer(layer);
     }
     this.front.el.classList.remove('front');
     this.back.el.classList.remove('front');

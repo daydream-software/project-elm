@@ -181,13 +181,52 @@ const readBody = (req) => new Promise((resolve, reject) => {
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.mp4': 'video/mp4', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' };
 /**
+ * Parse a `Range: bytes=...` header against a known file size.
+ *
+ * @param {string} [header]
+ * @param {number} size
+ * @returns {?{start: number, end: number}} `null` if absent/unparseable/unsatisfiable.
+ */
+function parseRange(header, size) {
+  const m = /^bytes=(\d*)-(\d*)$/.exec(header || '');
+  if (!m || (m[1] === '' && m[2] === '')) return null;
+  const start = m[1] === '' ? Math.max(size - Number(m[2]), 0) : Number(m[1]);
+  const end = m[1] === '' ? size - 1 : (m[2] === '' ? size - 1 : Number(m[2]));
+  if (start > end || end >= size) return null;
+  return { start, end };
+}
+
+/**
+ * Stream a file to `res`, 404ing if the read fails after it's already started
+ * (e.g. the file was deleted between the `fs.stat` check and now) instead of
+ * letting the read stream's unhandled `'error'` event crash the process.
+ *
+ * @param {string} full
+ * @param {?{start: number, end: number}} streamOpts
+ * @param {import('node:http').ServerResponse} res
+ */
+function pipeFile(full, streamOpts, res) {
+  const stream = fs.createReadStream(full, streamOpts || undefined);
+  stream.on('error', () => {
+    if (!res.headersSent) res.writeHead(404, { 'content-type': 'text/plain' });
+    res.end();
+  });
+  stream.pipe(res);
+}
+
+/**
  * Serve a static file from the repo root, defaulting `/` to the curate UI.
  * Refuses dotfiles/dirs (secrets, `.git`) and any path escaping the repo root.
+ * Streams from disk (with `Range`/206 support) rather than reading the whole
+ * file into memory first — matters most for clip MP4s: the overlay's <video>
+ * can start receiving/decoding bytes immediately instead of waiting on a full
+ * disk read of the entire file before the response even begins.
  *
+ * @param {import('node:http').IncomingMessage} req
  * @param {import('node:http').ServerResponse} res
  * @param {string} urlPath - The raw request URL (path + optional query string).
  */
-function serveStatic(res, urlPath) {
+function serveStatic(req, res, urlPath) {
   let rel = decodeURIComponent(urlPath.split('?')[0]);
   if (rel === '/') rel = '/render/curate/index.html';
   if (rel.endsWith('/')) rel += 'index.html';
@@ -196,10 +235,27 @@ function serveStatic(res, urlPath) {
   if (rel.split('/').some(seg => seg.startsWith('.'))) { res.writeHead(404, { 'content-type': 'text/plain' }).end('404'); return; }
   const full = path.join(ROOT, rel);
   if (full !== ROOT && !full.startsWith(ROOT + path.sep)) { res.writeHead(403).end('Forbidden'); return; }
-  fs.readFile(full, (err, data) => {
-    if (err) { res.writeHead(404, { 'content-type': 'text/plain' }).end('404 ' + rel); return; }
-    res.writeHead(200, { 'content-type': TYPES[path.extname(full)] || 'application/octet-stream', 'cache-control': 'no-store' });
-    res.end(data);
+  const type = TYPES[path.extname(full)] || 'application/octet-stream';
+  fs.stat(full, (err, stat) => {
+    if (err || !stat.isFile()) { res.writeHead(404, { 'content-type': 'text/plain' }).end('404 ' + rel); return; }
+
+    const range = parseRange(req.headers.range, stat.size);
+    if (req.headers.range && !range) {
+      res.writeHead(416, { 'content-range': `bytes */${stat.size}` });
+      return res.end();
+    }
+    if (range) {
+      res.writeHead(206, {
+        'content-type': type, 'cache-control': 'no-store', 'accept-ranges': 'bytes',
+        'content-range': `bytes ${range.start}-${range.end}/${stat.size}`,
+        'content-length': range.end - range.start + 1,
+      });
+      pipeFile(full, { start: range.start, end: range.end }, res);
+      return;
+    }
+
+    res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store', 'accept-ranges': 'bytes', 'content-length': stat.size });
+    pipeFile(full, null, res);
   });
 }
 
@@ -338,7 +394,7 @@ const server = http.createServer(async (req, res) => {
       req.on('close', unsubscribe);
       return;
     }
-    return serveStatic(res, req.url);
+    return serveStatic(req, res, req.url);
   } catch (e) {
     const msg = e.message === 'NO_TOKEN' ? 'Not logged in' : e.message;
     if (e.message !== 'NO_TOKEN') dashboard.log(`ERROR ${e.stack || e.message}`);
