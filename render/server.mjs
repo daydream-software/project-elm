@@ -412,7 +412,9 @@ server.listen(PORT, '127.0.0.1', () => {   // localhost only — never expose to
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
 
-  dashboard.start({ port: PORT, subscribers, uiSubscribers, getLogin: () => LOGIN, getGitStatus: gitUpdate.getStatus });
+  // Same shutdown fn as SIGINT/SIGTERM — the dashboard's `q` keybind (see dashboard.mjs's
+  // setupKeybinds) just gives the TTY panel a third way to trigger it.
+  dashboard.start({ port: PORT, subscribers, uiSubscribers, getLogin: () => LOGIN, getGitStatus: gitUpdate.getStatus, onQuit: shutdown });
   // Fire-and-forget: warn-only update check (git fetch + compare, never pull/merge — see
   // git-update.mjs). Runs once at startup, same principle as this project's "no automatic
   // Twitch calls" — checked here, not polled, and never applied without the user's say-so.

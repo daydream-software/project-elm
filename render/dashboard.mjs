@@ -15,6 +15,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import * as tw from './twitch.mjs';
 import * as cfg from './configs.mjs';
 import * as metrics from './metrics.mjs';
@@ -26,7 +27,7 @@ const useColor = !process.env.NO_COLOR;
 
 const CLIP_STATS_SAFETY_MS = 30_000;   // periodic re-scan, in case a watch event was ever missed
 
-const state = { port: 0, subscribers: new Map(), uiSubscribers: new Set(), getLogin: () => ({}), getGitStatus: () => ({ checked: false }) };
+const state = { port: 0, subscribers: new Map(), uiSubscribers: new Set(), getLogin: () => ({}), getGitStatus: () => ({ checked: false }), onQuit: () => process.exit(0) };
 const logLines = [];
 let panelActive = false;
 let timer = null;
@@ -197,6 +198,35 @@ function statusLine(label, count, extra) {
   return `${label.padEnd(12)}${dot} ${text}`;
 }
 
+/** Best-effort: launch the OS default browser at `url`. Failures (e.g. no `xdg-open`) just log. */
+function openBrowser(url) {
+  const [cmd, args] = process.platform === 'darwin' ? ['open', [url]]
+    : process.platform === 'win32' ? ['cmd', ['/c', 'start', '""', url]]
+    : ['xdg-open', [url]];
+  const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
+  const fail = () => log(`Couldn't open a browser automatically — visit ${url}`);
+  child.on('error', fail);
+  child.on('close', (code) => { if (code) fail(); });   // launcher ran but couldn't hand off (e.g. no DISPLAY, no default browser)
+  child.unref();
+}
+
+/**
+ * Single-keypress shortcuts while the panel owns the terminal: `q` quits cleanly (via
+ * `state.onQuit`, the same shutdown path as SIGINT/SIGTERM), `b` opens the web UI.
+ * Raw mode disables the terminal's own Ctrl+C→SIGINT handling, so `\u0003` (Ctrl+C) is
+ * handled explicitly here too rather than relying on a SIGINT listener firing.
+ */
+function setupKeybinds() {
+  if (!process.stdin.isTTY) return;   // e.g. stdout is a TTY but stdin is redirected — no-op
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (key) => {
+    if (key === 'q' || key === '\u0003') { state.onQuit(); return; }
+    if (key === 'b') { log(`Opening http://localhost:${state.port}/ in your browser…`); openBrowser(`http://localhost:${state.port}/`); }
+  });
+}
+
 /** Build every line of the dashboard panel for one render pass. */
 function buildPanel() {
   pulseFrame++;   // once per render pass, not per row — keeps every active dot in phase
@@ -209,7 +239,7 @@ function buildPanel() {
   const twitchRate = metrics.twitchRatePerMin();
 
   const lines = [
-    `${colorize('Project Elm', '1')} — dashboard`,
+    `${colorize('Project Elm', '1')} — dashboard   ${colorize('[b]', '2')} browser  ${colorize('[q]', '2')} quit`,
     `${statusLine('Web UI', uiCount, `open (${uiCount} tab${uiCount === 1 ? '' : 's'})`)} — http://localhost:${state.port}/`,
     statusLine('Overlay', overlayCount, `${overlayCount} connected`),
     `Twitch      ${authLine()}`,
@@ -254,13 +284,16 @@ function render() {
  *   for open curate-UI tabs.
  * @param {() => object} [opts.getLogin] - Returns the in-memory device-login state.
  * @param {() => object} [opts.getGitStatus] - Returns the latest git-update.mjs check result.
+ * @param {() => void} [opts.onQuit] - Called on the `q` keybind (and Ctrl+C, since raw
+ *   mode swallows the terminal's own SIGINT handling) — should shut the server down.
  */
-export function start({ port, subscribers, uiSubscribers, getLogin, getGitStatus }) {
+export function start({ port, subscribers, uiSubscribers, getLogin, getGitStatus, onQuit }) {
   state.port = port;
   if (subscribers) state.subscribers = subscribers;
   if (uiSubscribers) state.uiSubscribers = uiSubscribers;
   if (getLogin) state.getLogin = getLogin;
   if (getGitStatus) state.getGitStatus = getGitStatus;
+  if (onQuit) state.onQuit = onQuit;
 
   if (!process.stdout.isTTY) {
     console.log(`\n  Project Elm — selection UI at http://localhost:${port}/`);
@@ -279,6 +312,7 @@ export function start({ port, subscribers, uiSubscribers, getLogin, getGitStatus
     clearInterval(clipStatsSafetyTimer);
     clearTimeout(clipStatsDebounce);
     if (clipStatsWatcher) clipStatsWatcher.close();
+    if (process.stdin.isTTY) process.stdin.setRawMode(false);
     process.stdout.write('\x1b[?25h\n');
   });
 
@@ -289,6 +323,7 @@ export function start({ port, subscribers, uiSubscribers, getLogin, getGitStatus
     if (!clipStatsWatcher) watchClipsDir();
   }, CLIP_STATS_SAFETY_MS);
 
+  setupKeybinds();
   render();
   timer = setInterval(render, REFRESH_MS);
 }
