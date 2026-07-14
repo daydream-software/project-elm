@@ -93,6 +93,10 @@ cd project-elm</code></pre>
         </div>
       </figure>
       <p>Click <strong>Log in with Twitch</strong> — a device code and URL appear on the page. Open the URL, enter the code, sign in with your <strong>channel account</strong>, and approve the <em>manage clips</em> permission (scope <code>channel:manage:clips</code> — required to download your own clips). The token is cached locally in <code>render/.token.json</code> (gitignored) and refreshes itself; you won't need to log in again.</p>
+      <div class="callout">
+        <span class="glyph">🖥️</span>
+        <p>If your terminal is interactive, the command above also opens a live dashboard there — Web UI/overlay status, Twitch auth, clip/config counts, and an <strong>Update</strong> line checked once at startup (<code>git fetch</code> + compare against your tracked branch; it never pulls or merges anything for you). Press <strong>b</strong> to open the web UI in your browser, <strong>q</strong> to quit cleanly. The same "update available" notice shows as a banner in the web UI if you're behind.</p>
+      </div>
     </li>
   </ol>
 

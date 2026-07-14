@@ -70,6 +70,13 @@ cp .env.example .env
 node render/server.mjs
 ```
 
+If your terminal is interactive, this also opens a live dashboard there — Web UI/overlay
+status, Twitch auth, clip/config counts, and an **Update** line. It checks once at startup
+whether your checkout is behind its tracked branch (`git fetch` + compare — never pulls or
+merges anything); if so, both the dashboard and the curate UI show a reminder to run
+`git pull` yourself. Press **`b`** to open the web UI in your default browser, **`q`** to
+quit cleanly.
+
 Open **<http://localhost:8080/>**:
 
 1. **First run:** log in — a code + URL appear on the page. Open the URL, enter the
@@ -162,6 +169,8 @@ Each clip is normalized (letterbox to the canvas, constant fps), loudness-evened
 | `render/curate/` | the selection web UI (Daydream-branded) |
 | `render/twitch.mjs` | shared Twitch logic (auth / list / download) |
 | `render/configs.mjs` | saved reel configurations (name + clips + order + toggles) |
+| `render/dashboard.mjs` | live terminal status dashboard (server/Twitch/update activity) |
+| `render/git-update.mjs` | one-shot startup check for a newer commit (warn-only, never pulls) |
 | `render/cli/fetch-clips.mjs` | optional CLI over `twitch.mjs` |
 | `render/render-reel.mjs` | render engine (clips + manifest → one MP4) |
 | `overlay/` | the live crossfade overlay player (plays downloaded clips) |
@@ -180,6 +189,9 @@ are gitignored — all local user data.
 - The overlay's live reload uses a plain SSE connection back to `render/server.mjs` —
   so the overlay only ever needs to be reachable at `http://localhost:8080`, same as
   the selection UI.
+- The dashboard's **Update** status (and the matching banner in the curate UI) is
+  warn-only: a `git fetch` + compare against your tracked branch, run once at startup.
+  It never runs `git pull` for you — that's always your call.
 
 ## Not yet
 

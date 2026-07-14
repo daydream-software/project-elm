@@ -130,6 +130,10 @@
   <pre><code>node render/render-reel.mjs render/realclips/manifest.json   # → render/realclips/reel.mp4</code></pre>
   <p>Each clip is normalized (letterboxed, constant fps), loudness-evened (<code>loudnorm</code>), optionally titled, then chained with a crossfade — the output plays anywhere, including as an OBS <strong>Media Source</strong>.</p>
 
+  <h2>Terminal dashboard</h2>
+  <p>While <code>node render/server.mjs</code> runs in an interactive terminal, it shows a live status dashboard: Web UI and overlay connection counts, Twitch auth state, clip/config counts, and an <strong>Update</strong> line. Press <strong>b</strong> to open the web UI in your default browser, <strong>q</strong> to quit cleanly (the same shutdown path as Ctrl+C).</p>
+  <p>The <strong>Update</strong> line — and a matching banner in the web UI — comes from a one-shot check at startup: a <code>git fetch</code> plus a comparison against your tracked branch. It's warn-only: it never runs <code>git pull</code> for you, it just tells you when you're behind so you can pull yourself.</p>
+
   <h2>Optional CLI</h2>
   <p>The web UI covers everything, but the same fetch/select is available from the terminal:</p>
   <pre><code>node render/cli/fetch-clips.mjs login              # one-time browser authorization
