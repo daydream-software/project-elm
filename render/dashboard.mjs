@@ -26,7 +26,7 @@ const useColor = !process.env.NO_COLOR;
 
 const CLIP_STATS_SAFETY_MS = 30_000;   // periodic re-scan, in case a watch event was ever missed
 
-const state = { port: 0, subscribers: new Map(), uiSubscribers: new Set(), getLogin: () => ({}) };
+const state = { port: 0, subscribers: new Map(), uiSubscribers: new Set(), getLogin: () => ({}), getGitStatus: () => ({ checked: false }) };
 const logLines = [];
 let panelActive = false;
 let timer = null;
@@ -131,6 +131,25 @@ function authLine() {
   return 'not logged in yet (log in from the web UI)';
 }
 
+/**
+ * Render the "Update" status line: checking / not a git checkout / no upstream
+ * configured / unreachable / up to date / N commits behind. Warn-only — this
+ * never runs `git pull` itself, see git-update.mjs.
+ */
+function updateLine() {
+  const g = state.getGitStatus() || {};
+  if (!g.checked) return colorize('checking…', '2');
+  if (!g.supported) return colorize('not a git checkout', '2');
+  // First line only, capped — a raw execFile error can carry multi-line stderr (or just a
+  // long single line that wraps), and this panel is a fixed-line-count in-place redraw
+  // (see render()): anything that prints more terminal rows than buildPanel() counted
+  // permanently desyncs the cursor math.
+  if (g.error) return colorize(`unable to check (${g.error.split('\n')[0].slice(0, 100)})`, '2');
+  if (!g.tracked) return colorize('no upstream branch configured', '2');
+  if (!g.updateAvailable) return colorize('up to date', '2');
+  return colorize(`⚠ ${g.behind} commit${g.behind === 1 ? '' : 's'} behind ${g.upstream} — run \`git pull\``, '33');
+}
+
 /* Active overlays = configs with at least one open SSE connection (see
  * server.mjs's `subscribers`). This reports "connected", not "playing" — the
  * overlay never reports its play/pause state back to the server (OBS
@@ -196,6 +215,7 @@ function buildPanel() {
     `Twitch      ${authLine()}`,
     `Clips       ${clips.count} downloaded · ${humanSize(clips.bytes)} on disk`,
     `Configs     ${configs.length} saved`,
+    `Update      ${updateLine()}`,
     '',
     ...overlayLines(),
     '',
@@ -233,12 +253,14 @@ function render() {
  * @param {Set<import('node:http').ServerResponse>} [opts.uiSubscribers] - Same idea,
  *   for open curate-UI tabs.
  * @param {() => object} [opts.getLogin] - Returns the in-memory device-login state.
+ * @param {() => object} [opts.getGitStatus] - Returns the latest git-update.mjs check result.
  */
-export function start({ port, subscribers, uiSubscribers, getLogin }) {
+export function start({ port, subscribers, uiSubscribers, getLogin, getGitStatus }) {
   state.port = port;
   if (subscribers) state.subscribers = subscribers;
   if (uiSubscribers) state.uiSubscribers = uiSubscribers;
   if (getLogin) state.getLogin = getLogin;
+  if (getGitStatus) state.getGitStatus = getGitStatus;
 
   if (!process.stdout.isTTY) {
     console.log(`\n  Project Elm — selection UI at http://localhost:${port}/`);
@@ -248,9 +270,10 @@ export function start({ port, subscribers, uiSubscribers, getLogin }) {
 
   panelActive = true;
   process.stdout.write('\x1b[?25l'); // hide cursor while the panel owns the screen
-  // Restore the cursor on ANY exit path (SIGINT/SIGTERM below, but also SIGHUP,
-  // an uncaught exception, etc.) — 'exit' fires for all of those, so this is the
-  // one place that must run, not a per-signal special case.
+  // Restore the cursor on ANY exit path — SIGINT/SIGTERM are converted to a clean
+  // process.exit() by server.mjs (registered before start() is called, so it always
+  // wins the race), but also SIGHUP, an uncaught exception, etc. — 'exit' fires for
+  // all of those, so this is the one place that must run, not a per-signal special case.
   process.on('exit', () => {
     clearInterval(timer);
     clearInterval(clipStatsSafetyTimer);
@@ -258,8 +281,6 @@ export function start({ port, subscribers, uiSubscribers, getLogin }) {
     if (clipStatsWatcher) clipStatsWatcher.close();
     process.stdout.write('\x1b[?25h\n');
   });
-  process.once('SIGINT', () => process.exit(0));
-  process.once('SIGTERM', () => process.exit(0));
 
   refreshClipStats();
   watchClipsDir();

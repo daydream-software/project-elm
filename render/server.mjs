@@ -21,6 +21,7 @@ import * as cfg from './configs.mjs';
 import * as catalog from './catalog.mjs';
 import * as metrics from './metrics.mjs';
 import * as dashboard from './dashboard.mjs';
+import * as gitUpdate from './git-update.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');            // repo root (serves /overlay/, /render/…)
@@ -268,7 +269,7 @@ const server = http.createServer(async (req, res) => {
     // Redirect bare "/" to the UI dir so its relative assets resolve correctly.
     if (p === '/') { res.writeHead(302, { Location: '/render/curate/' }); return res.end(); }
     if (p === '/api/status') {
-      return send(res, 200, { hasCreds: !!tw.CLIENT_ID, authorized: tw.hasToken(), login: LOGIN, orderFields: ORDER_FIELDS });
+      return send(res, 200, { hasCreds: !!tw.CLIENT_ID, authorized: tw.hasToken(), login: LOGIN, orderFields: ORDER_FIELDS, git: gitUpdate.getStatus() });
     }
     if (p === '/api/login' && req.method === 'POST') {
       if (tw.hasToken()) return send(res, 200, { authorized: true });
@@ -403,5 +404,17 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {   // localhost only — never expose to the LAN
-  dashboard.start({ port: PORT, subscribers, uiSubscribers, getLogin: () => LOGIN });
+  // Registered before dashboard.start() so it always wins the race for SIGINT/SIGTERM —
+  // killing any in-flight git-update.mjs child before exiting (see killActiveCheck's
+  // docstring for why that matters) in BOTH TTY and non-TTY (piped/process-manager) modes,
+  // the latter of which dashboard.mjs never hooks these signals for at all.
+  const shutdown = () => { gitUpdate.killActiveCheck(); process.exit(0); };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+
+  dashboard.start({ port: PORT, subscribers, uiSubscribers, getLogin: () => LOGIN, getGitStatus: gitUpdate.getStatus });
+  // Fire-and-forget: warn-only update check (git fetch + compare, never pull/merge — see
+  // git-update.mjs). Runs once at startup, same principle as this project's "no automatic
+  // Twitch calls" — checked here, not polled, and never applied without the user's say-so.
+  gitUpdate.checkForUpdate(ROOT);
 });

@@ -44,6 +44,15 @@
   </div>
 </header>
 
+<!-- Update-available notice: warn-only — a `git fetch` + compare run once at server
+     startup (see server.mjs/git-update.mjs), never a `git pull`. Independent of
+     login/app state so it's visible either way; dismissing it just hides it for this
+     tab (it reappears next page load until the checkout is actually updated). -->
+<section id="updateBanner" class="banner update-banner" hidden>
+  <span id="updateBannerText"></span>
+  <button id="updateBannerClose" class="btn ghost icon-btn" type="button" aria-label="Dismiss">✕</button>
+</section>
+
 <!-- Login (shown until authorized) -->
 <section id="login" class="panel" hidden>
   <div id="login-idle">

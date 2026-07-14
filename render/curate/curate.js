@@ -68,6 +68,43 @@ function showApp() {
   $('cfgSwitchBtn').disabled = false; $('configQuickSave').disabled = false;
 }
 
+/* ---- Update-available notice (warn-only, see server.mjs/git-update.mjs) ---- */
+/**
+ * Show the update-available banner, or a subdued note if the check itself failed
+ * (offline, git missing, …) — silence otherwise. Only called once the check has
+ * actually finished (see {@link pollGitStatus}); does nothing for the merely-benign
+ * "no upstream configured" / "not a git checkout" cases, which aren't failures.
+ */
+function updateGitBanner(git) {
+  const el = $('updateBanner');
+  if (git.updateAvailable) {
+    const n = git.behind;
+    $('updateBannerText').innerHTML = `⟳ Update available — ${n} commit${n === 1 ? '' : 's'} behind ` +
+      `<code>${esc(git.upstream || 'upstream')}</code>. Run <code>git pull</code> in the project folder, then restart the server.`;
+    el.classList.remove('subtle');
+    el.hidden = false;
+  } else if (git.error) {
+    $('updateBannerText').textContent = `Couldn't check for updates (${git.error}).`;
+    el.classList.add('subtle');
+    el.hidden = false;
+  }
+}
+
+const GIT_POLL_MS = 2000, GIT_POLL_MAX_ATTEMPTS = 8;   // covers checkForUpdate's own ~10s worst case with room to spare
+/**
+ * The startup git-update check (server.mjs) can take up to ~10s (a real `git fetch`) and
+ * runs fire-and-forget from the moment the server starts — a page loaded/refreshed before
+ * it resolves would otherwise see `{checked: false}` forever and never show the banner.
+ * Re-polls `/api/status` until `checked` is true, then renders whatever it found.
+ */
+function pollGitStatus(git, attempt = 0) {
+  if (git && git.checked) return updateGitBanner(git);
+  if (attempt >= GIT_POLL_MAX_ATTEMPTS) return;
+  setTimeout(async () => {
+    try { pollGitStatus((await api('/api/status')).git, attempt + 1); } catch { /* page may have navigated away */ }
+  }, GIT_POLL_MS);
+}
+
 /* ---- Login (device code) ---- */
 /** Kick off device-code login, show the code/URL, and poll until it's authorized. */
 async function doLogin() {
@@ -799,6 +836,7 @@ async function deleteConfigItem(id) {
 /** Wire up all UI event listeners and load initial state (auth status, clips, configs). */
 async function init() {
   $('login-btn').addEventListener('click', doLogin);
+  $('updateBannerClose').addEventListener('click', () => { $('updateBanner').hidden = true; });
   // Period/Max/Load-all are pure client-side filters (see visibleClips()) — apply
   // instantly on change, no fetch, no explicit "Load" click needed.
   $('days').addEventListener('change', render);
@@ -861,6 +899,7 @@ async function init() {
   try {
     const st = await api('/api/status');
     ORDER_FIELDS = st.orderFields || {};
+    pollGitStatus(st.git);
     if (!st.hasCreds) return showLogin('setup');
     if (st.authorized) {
       showApp(); loadClips();   // fired without awaiting — runs concurrently with loadConfigs() below
