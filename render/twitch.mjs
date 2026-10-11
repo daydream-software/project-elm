@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as metrics from './metrics.mjs';
-import { readJsonStrict, writeJson } from './json-store.mjs';
+import { readJson, readJsonStrict, writeJson } from './json-store.mjs';
 
 export const DIR = path.dirname(fileURLToPath(import.meta.url));
 export const CLIPS_DIR = path.join(DIR, 'realclips');
@@ -162,11 +162,35 @@ export async function login({ onCode } = {}) {
  * @throws {Error} If the refresh call fails — the caller must have the user log in again.
  */
 async function refresh(t) {
-  const { ok, j } = await postForm(`${ID}/token`, { client_id: CLIENT_ID, grant_type: 'refresh_token', refresh_token: t.refresh_token });
+  const { ok, status, j } = await postForm(`${ID}/token`, { client_id: CLIENT_ID, grant_type: 'refresh_token', refresh_token: t.refresh_token });
+  // 400/401 = Twitch rejected the refresh token itself (expired, revoked, already used):
+  // it's dead for good, so drop it and report "not logged in" — otherwise hasToken()
+  // keeps saying "authorized" and the web UI never offers a fresh login.
+  if (status === 400 || status === 401) { clearToken(t); throw new Error('NO_TOKEN'); }
   if (!ok || !j.access_token) throw new Error('refresh failed — rerun login. ' + JSON.stringify(j));
   const nt = { ...j, expires_at: Date.now() + j.expires_in * 1000 };
   saveToken(nt);   // rotating refresh token
   return nt;
+}
+/**
+ * Delete the cached token — but only if it's still the one the caller saw rejected, so a
+ * fresh login that landed in the meantime is never thrown away.
+ *
+ * @param {object} t - The token object Twitch just rejected.
+ */
+function clearToken(t) {
+  const cur = readJson(TOKEN_FILE);
+  if (cur && cur.access_token === t.access_token) fs.rmSync(TOKEN_FILE, { force: true });
+}
+/**
+ * Throw `'NO_TOKEN'` (after dropping the cached token) if Twitch answered 401 — the access
+ * token was revoked or otherwise invalidated before its `expires_at`.
+ *
+ * @param {number} status - HTTP status of a Helix response.
+ * @param {object} t - The token object the request was made with.
+ */
+function checkAuth(status, t) {
+  if (status === 401) { clearToken(t); throw new Error('NO_TOKEN'); }
 }
 /** Whether a cached token file exists (does not check it's still valid — see {@link token}). */
 export function hasToken() { return fs.existsSync(TOKEN_FILE); }
@@ -177,7 +201,8 @@ let refreshing = null;   // shared in-flight refresh — single-use refresh toke
  * single-use refresh token is never spent twice.
  *
  * @returns {Promise<object>} The cached token object (`access_token`, `expires_at`, …).
- * @throws {Error} `'NO_TOKEN'` if the user has never logged in.
+ * @throws {Error} `'NO_TOKEN'` if the user has never logged in, or Twitch rejected the
+ *   refresh token (the cached token is deleted so the user can log in again).
  */
 export async function token() {
   let t = readJsonStrict(TOKEN_FILE);
@@ -201,6 +226,7 @@ export async function token() {
 async function helix(pathq, t) {
   const r = await fetch(`${HELIX}/${pathq}`, { headers: { 'Client-Id': CLIENT_ID, Authorization: 'Bearer ' + t.access_token } });
   metrics.recordTwitchCall();
+  checkAuth(r.status, t);
   if (!r.ok) throw new Error(`Helix ${pathq.split('?')[0]} → ${r.status} ${await r.text()}`);
   return r.json();
 }
@@ -338,6 +364,7 @@ async function resolveUrls(broadcasterId, editorId, ids, t) {
            + ids.map(id => 'clip_id=' + encodeURIComponent(id)).join('&');
   const r = await fetch(`${HELIX}/clips/downloads?${qs}`, { headers: { 'Client-Id': CLIENT_ID, Authorization: 'Bearer ' + t.access_token } });
   metrics.recordTwitchCall();
+  checkAuth(r.status, t);
   const body = await r.text();
   if (!r.ok) throw new Error(`clips/downloads → ${r.status} ${body}`);
   return (JSON.parse(body).data) || [];

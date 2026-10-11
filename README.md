@@ -82,7 +82,9 @@ Open **<http://localhost:8080/>**:
 1. **First run:** log in — a code + URL appear on the page. Open the URL, enter the
    code, sign in with your **channel account**, and approve the *manage clips*
    permission. The token is cached in `render/.token.json` (gitignored) and
-   **auto-refreshed** — you won't log in again.
+   **auto-refreshed** — normally you won't log in again. If Twitch ever rejects it
+   (unused for too long, or access revoked), the page drops it and shows the login
+   button again on your next Download/Update.
    *(Why a login? Downloading clips needs the broadcaster's consent, scope
    `channel:manage:clips`; Twitch gates it by design.)*
 2. **Browse, pick & curate:** each clip shows a **✓ Downloaded** badge or a **Download**
