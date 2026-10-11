@@ -341,10 +341,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/catalog/refresh' && req.method === 'POST') {
       if (catalogRefreshing) return send(res, 409, { error: 'Refresh already in progress' });
+      catalogRefreshing = true;   // set before any await, so a second POST can't slip past the 409
       // Get (refreshing if needed) the token up front: a dead login then surfaces as this
       // request's 401 instead of an SSE error the client may not be subscribed for yet.
-      await tw.token();
-      catalogRefreshing = true;
+      try { await tw.token(); } catch (e) { catalogRefreshing = false; throw e; }
       send(res, 200, { started: true });   // respond immediately — progress comes over SSE
       (async () => {
         try {

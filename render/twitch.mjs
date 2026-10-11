@@ -163,10 +163,13 @@ export async function login({ onCode } = {}) {
  */
 async function refresh(t) {
   const { ok, status, j } = await postForm(`${ID}/token`, { client_id: CLIENT_ID, grant_type: 'refresh_token', refresh_token: t.refresh_token });
-  // 400/401 = Twitch rejected the refresh token itself (expired, revoked, already used):
-  // it's dead for good, so drop it and report "not logged in" — otherwise hasToken()
-  // keeps saying "authorized" and the web UI never offers a fresh login.
-  if (status === 400 || status === 401) { clearToken(t); throw new Error('NO_TOKEN'); }
+  // Twitch rejected the refresh token itself (expired, revoked, already used): it's dead
+  // for good, so drop it and report "not logged in" — otherwise hasToken() keeps saying
+  // "authorized" and the web UI never offers a fresh login. Other 400s (e.g. a bad
+  // client_id) fall through as a plain failure and keep the token.
+  if (status === 401 || (status === 400 && /invalid refresh token/i.test(j.message || ''))) {
+    clearToken(t); throw new Error('NO_TOKEN');
+  }
   if (!ok || !j.access_token) throw new Error('refresh failed — rerun login. ' + JSON.stringify(j));
   const nt = { ...j, expires_at: Date.now() + j.expires_in * 1000 };
   saveToken(nt);   // rotating refresh token
@@ -182,19 +185,14 @@ function clearToken(t) {
   const cur = readJson(TOKEN_FILE);
   if (cur && cur.access_token === t.access_token) fs.rmSync(TOKEN_FILE, { force: true });
 }
-/**
- * Throw `'NO_TOKEN'` (after dropping the cached token) if Twitch answered 401 — the access
- * token was revoked or otherwise invalidated before its `expires_at`.
- *
- * @param {number} status - HTTP status of a Helix response.
- * @param {object} t - The token object the request was made with.
- */
-function checkAuth(status, t) {
-  if (status === 401) { clearToken(t); throw new Error('NO_TOKEN'); }
-}
 /** Whether a cached token file exists (does not check it's still valid — see {@link token}). */
 export function hasToken() { return fs.existsSync(TOKEN_FILE); }
 let refreshing = null;   // shared in-flight refresh — single-use refresh tokens must not race
+/** Refresh `t`, joining any refresh already in flight instead of spending the token twice. */
+function sharedRefresh(t) {
+  if (!refreshing) refreshing = refresh(t).finally(() => { refreshing = null; });
+  return refreshing;
+}
 /**
  * Get a valid access token, transparently refreshing it if it's expired (or about to
  * expire within 60s). Concurrent callers share the same in-flight refresh so a
@@ -207,11 +205,36 @@ let refreshing = null;   // shared in-flight refresh — single-use refresh toke
 export async function token() {
   let t = readJsonStrict(TOKEN_FILE);
   if (!t) throw new Error('NO_TOKEN');
-  if (Date.now() > t.expires_at - 60_000) {
-    if (!refreshing) refreshing = refresh(t).finally(() => { refreshing = null; });
-    t = await refreshing;
-  }
+  if (Date.now() > t.expires_at - 60_000) t = await sharedRefresh(t);
   return t;
+}
+
+/**
+ * GET a Helix URL with the given token. On a 401 (access token expired mid-operation, or
+ * invalidated early) refresh once and retry; only a 401 that survives a fresh token drops
+ * the login. The new token is written into `t` itself, so long loops that reuse their
+ * `t` (pagination, batched downloads) carry on with it.
+ *
+ * @param {string} url - Full Helix URL.
+ * @param {object} t - Token object (as returned by {@link token}); updated in place on refresh.
+ * @returns {Promise<Response>}
+ * @throws {Error} `'NO_TOKEN'` if Twitch rejects the login for good.
+ */
+async function authedGet(url, t) {
+  const call = async () => {
+    const r = await fetch(url, { headers: { 'Client-Id': CLIENT_ID, Authorization: 'Bearer ' + t.access_token } });
+    metrics.recordTwitchCall();
+    return r;
+  };
+  let r = await call();
+  if (r.status !== 401) return r;
+  const cur = readJsonStrict(TOKEN_FILE);
+  if (!cur) throw new Error('NO_TOKEN');
+  // Another caller may already have refreshed (or re-logged in) since `t` was read.
+  Object.assign(t, cur.access_token === t.access_token ? await sharedRefresh(cur) : cur);
+  r = await call();
+  if (r.status === 401) { clearToken(t); throw new Error('NO_TOKEN'); }
+  return r;
 }
 
 /* ---- Helix ---- */
@@ -224,9 +247,7 @@ export async function token() {
  * @throws {Error} If the response isn't OK.
  */
 async function helix(pathq, t) {
-  const r = await fetch(`${HELIX}/${pathq}`, { headers: { 'Client-Id': CLIENT_ID, Authorization: 'Bearer ' + t.access_token } });
-  metrics.recordTwitchCall();
-  checkAuth(r.status, t);
+  const r = await authedGet(`${HELIX}/${pathq}`, t);
   if (!r.ok) throw new Error(`Helix ${pathq.split('?')[0]} → ${r.status} ${await r.text()}`);
   return r.json();
 }
@@ -362,9 +383,7 @@ export async function gameNames(ids) {
 async function resolveUrls(broadcasterId, editorId, ids, t) {
   const qs = `broadcaster_id=${encodeURIComponent(broadcasterId)}&editor_id=${encodeURIComponent(editorId)}&`
            + ids.map(id => 'clip_id=' + encodeURIComponent(id)).join('&');
-  const r = await fetch(`${HELIX}/clips/downloads?${qs}`, { headers: { 'Client-Id': CLIENT_ID, Authorization: 'Bearer ' + t.access_token } });
-  metrics.recordTwitchCall();
-  checkAuth(r.status, t);
+  const r = await authedGet(`${HELIX}/clips/downloads?${qs}`, t);
   const body = await r.text();
   if (!r.ok) throw new Error(`clips/downloads → ${r.status} ${body}`);
   return (JSON.parse(body).data) || [];
