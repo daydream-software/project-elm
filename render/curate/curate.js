@@ -73,6 +73,7 @@ function showApp() {
   $('login').hidden = true; $('filterOptionsBar').hidden = false;
   $('catalogBar').hidden = false; $('sequence').hidden = false;
   $('cfgSwitchBtn').disabled = false; $('configQuickSave').disabled = false;
+  $('preview').disabled = !loadedConfigId;   // showLogin() disabled it; re-login mid-session must undo that
 }
 
 /* ---- Update-available notice (warn-only, see server.mjs/git-update.mjs) ---- */
