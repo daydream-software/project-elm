@@ -169,6 +169,18 @@ function startLogin() {
   });
 }
 
+/**
+ * A Twitch call found no usable token (never logged in, or twitch.mjs just dropped one
+ * Twitch rejected): reset the in-memory login state so the UI offers a fresh login, and
+ * build the error body the curate UI recognizes (`loginRequired`) to show the login screen.
+ *
+ * @returns {{error: string, loginRequired: true}}
+ */
+function loggedOut() {
+  LOGIN = { authorized: false };
+  return { error: 'Twitch login expired or missing — please log in again.', loginRequired: true };
+}
+
 /** Send a JSON response with the given status code. */
 const send = (res, status, obj) => {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
@@ -329,6 +341,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/catalog/refresh' && req.method === 'POST') {
       if (catalogRefreshing) return send(res, 409, { error: 'Refresh already in progress' });
+      // Get (refreshing if needed) the token up front: a dead login then surfaces as this
+      // request's 401 instead of an SSE error the client may not be subscribed for yet.
+      await tw.token();
       catalogRefreshing = true;
       send(res, 200, { started: true });   // respond immediately — progress comes over SSE
       (async () => {
@@ -336,8 +351,11 @@ const server = http.createServer(async (req, res) => {
           const result = await catalog.refresh(({ fetched, page }) => catalogBroadcast({ type: 'progress', fetched, page }));
           catalogBroadcast({ type: 'done', ...result, updatedAt: catalog.lastUpdated() });
         } catch (e) {
-          catalogBroadcast({ type: 'error', error: e.message });
-          dashboard.log(`ERROR catalog refresh: ${e.stack || e.message}`);
+          if (e.message === 'NO_TOKEN') catalogBroadcast({ type: 'error', ...loggedOut() });
+          else {
+            catalogBroadcast({ type: 'error', error: e.message });
+            dashboard.log(`ERROR catalog refresh: ${e.stack || e.message}`);
+          }
         } finally {
           catalogRefreshing = false;
         }
@@ -397,9 +415,9 @@ const server = http.createServer(async (req, res) => {
     }
     return serveStatic(req, res, req.url);
   } catch (e) {
-    const msg = e.message === 'NO_TOKEN' ? 'Not logged in' : e.message;
-    if (e.message !== 'NO_TOKEN') dashboard.log(`ERROR ${e.stack || e.message}`);
-    return send(res, e.message === 'NO_TOKEN' ? 401 : 500, { error: msg });
+    if (e.message === 'NO_TOKEN') return send(res, 401, loggedOut());
+    dashboard.log(`ERROR ${e.stack || e.message}`);
+    return send(res, 500, { error: e.message });
   }
 });
 

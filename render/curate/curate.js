@@ -34,7 +34,8 @@ const isIncluded = (id) => sequence.includes(id);
 async function api(path, opts) {
   const r = await fetch(path, opts);
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  if (j.loginRequired) showExpiredLogin();   // Twitch token gone/rejected — see server.mjs loggedOut()
+  if (!r.ok) throw Object.assign(new Error(j.error || ('HTTP ' + r.status)), { loginRequired: !!j.loginRequired });
   return j;
 }
 
@@ -60,6 +61,12 @@ function showLogin(mode) {
   $('login-idle').hidden = mode !== 'idle';
   $('login-code').hidden = mode !== 'code';
   $('login-setup').hidden = mode !== 'setup';
+  $('login-expired').hidden = true;
+}
+/** Back to the login screen after Twitch rejected the saved token, saying why. */
+function showExpiredLogin() {
+  showLogin('idle');
+  $('login-expired').hidden = false;
 }
 /** Show the main curation app (hides the login screen). */
 function showApp() {
@@ -156,6 +163,9 @@ function refreshCatalog() {
   // `persistText` replaces the status line and STAYS there — loadClips() below would
   // otherwise immediately stomp it back to the plain "Catalog updated …" message, which
   // is why persistText is applied AFTER loadClips resolves, not before.
+  // Login gone: the login screen is already up (showExpiredLogin) — just stop, without
+  // finish()'s delayed loadClips() repainting the grid underneath it.
+  const abort = () => { es.close(); btn.disabled = false; $('catalogProgress').hidden = true; };
   const finish = (progressText, persistText) => {
     $('catalogProgressText').textContent = progressText;
     es.close();
@@ -177,11 +187,12 @@ function refreshCatalog() {
         `Catalog updated ${when} — ${msg.total} clips (${msg.added} new, ${msg.updated} updated, ${msg.newlyMissing} removed from Twitch).`,
       );
     } else if (msg.type === 'error') {
+      if (msg.loginRequired) { abort(); return showExpiredLogin(); }
       finish('⚠ ' + msg.error, '⚠ Update failed: ' + msg.error);
     }
   };
   es.onerror = () => { /* the 'error' message above (or a done) already handles cleanup in the normal case */ };
-  api('/api/catalog/refresh', { method: 'POST' }).catch(e => finish('⚠ ' + e.message, '⚠ Update failed: ' + e.message));
+  api('/api/catalog/refresh', { method: 'POST' }).catch(e => e.loginRequired ? abort() : finish('⚠ ' + e.message, '⚠ Update failed: ' + e.message));
 }
 
 // Period + Max/Load-all + search + Show-hidden: pure client-side filters over the
