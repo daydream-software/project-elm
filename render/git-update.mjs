@@ -60,10 +60,20 @@ function git(cwd, args) {
 }
 
 /**
+ * Strip C0 and C1 control characters (ESC, 8-bit CSI, …). Release summaries and commit
+ * subjects come from the remote and end up printed raw in the TTY dashboard, where an
+ * escape sequence could repaint or hijack the terminal.
+ *
+ * @param {string} s
+ * @returns {string}
+ */
+export function stripControlChars(s) {
+  return String(s).replace(/[\x00-\x1f\x7f-\x9f]/g, '').trim();
+}
+
+/**
  * Parse the one-line release summaries out of CHANGELOG.md text, i.e. headings of the
  * form `## rN — YYYY-MM-DD — <summary>` (see CHANGELOG.md's header for the numbering).
- * Control characters are stripped: the summary comes from the remote and ends up
- * printed raw in the TTY dashboard, where an ANSI escape could repaint the terminal.
  *
  * @param {string} text - CHANGELOG.md contents.
  * @returns {Map<number, string>} Release number → summary (headings without one are skipped).
@@ -72,7 +82,7 @@ export function parseChangelogSummaries(text) {
   const summaries = new Map();
   const heading = /^## r(\d+)\s+[—–-]\s+\d{4}-\d{2}-\d{2}\s+[—–-]\s+(.+?)\s*$/gm;
   for (const m of text.matchAll(heading)) {
-    const summary = m[2].replace(/[\x00-\x1f\x7f]/g, '').trim();
+    const summary = stripControlChars(m[2]);
     if (summary) summaries.set(Number(m[1]), summary);
   }
   return summaries;
@@ -103,7 +113,8 @@ async function incomingReleases(cwd, upstream) {
   }
   return subjects.map((subject, i) => {
     const release = shallow ? null : baseRelease + 1 + i;
-    return { release, summary: summaries.get(release) || subject };
+    // Sanitized here, at the single source of every summary (changelog or commit subject).
+    return { release, summary: stripControlChars(summaries.get(release) || subject) };
   });
 }
 

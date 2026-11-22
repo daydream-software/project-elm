@@ -12,6 +12,13 @@ those summaries from the remote's copy of this file and lists what a `git pull` 
 bring in, as `+rN: <summary>` (falling back to the commit subject for a release with
 no entry).
 
+## r21 — 2026-11-21 — Sanitize commit subjects shown by the update check
+
+### Security
+- The update check now strips control characters (C0 and C1, incl. ESC and 8-bit
+  CSI) from every release line it shows, including the commit-subject fallback, which
+  r20 printed raw in the terminal dashboard (terminal escape injection from the remote).
+
 ## r20 — 2026-11-21 — Fix no-store cache replaying edited clips; update check lists releases
 
 ### Fixed
