@@ -59,6 +59,54 @@ function git(cwd, args) {
   });
 }
 
+/**
+ * Parse the one-line release summaries out of CHANGELOG.md text, i.e. headings of the
+ * form `## rN — YYYY-MM-DD — <summary>` (see CHANGELOG.md's header for the numbering).
+ * Control characters are stripped: the summary comes from the remote and ends up
+ * printed raw in the TTY dashboard, where an ANSI escape could repaint the terminal.
+ *
+ * @param {string} text - CHANGELOG.md contents.
+ * @returns {Map<number, string>} Release number → summary (headings without one are skipped).
+ */
+export function parseChangelogSummaries(text) {
+  const summaries = new Map();
+  const heading = /^## r(\d+)\s+[—–-]\s+\d{4}-\d{2}-\d{2}\s+[—–-]\s+(.+?)\s*$/gm;
+  for (const m of text.matchAll(heading)) {
+    const summary = m[2].replace(/[\x00-\x1f\x7f]/g, '').trim();
+    if (summary) summaries.set(Number(m[1]), summary);
+  }
+  return summaries;
+}
+
+/**
+ * The releases on `upstream` that HEAD doesn't have yet, oldest first. Every commit on
+ * main is a release numbered by its position in main's first-parent history (see
+ * CHANGELOG.md), so the incoming ones are numbered on from the merge base and labelled
+ * with the UPSTREAM CHANGELOG.md summary — or the commit subject when there's no entry.
+ * In a shallow clone the truncated history makes the numbering wrong, so releases come
+ * back unnumbered (`release: null`) and labelled with their commit subject.
+ *
+ * @param {string} cwd - Repo root.
+ * @param {string} upstream - e.g. `origin/main`.
+ * @returns {Promise<{release: ?number, summary: string}[]>}
+ */
+async function incomingReleases(cwd, upstream) {
+  const base = await git(cwd, ['merge-base', 'HEAD', upstream]);
+  const baseRelease = Number(await git(cwd, ['rev-list', '--count', '--first-parent', base]));
+  const log = await git(cwd, ['log', '--first-parent', '--reverse', '--format=%s', `${base}..${upstream}`]);
+  const subjects = log ? log.split('\n') : [];
+  const shallow = (await git(cwd, ['rev-parse', '--is-shallow-repository'])) === 'true';
+  let summaries = new Map();
+  if (!shallow) {
+    try { summaries = parseChangelogSummaries(await git(cwd, ['show', `${upstream}:CHANGELOG.md`])); }
+    catch { /* no CHANGELOG.md upstream — commit subjects only */ }
+  }
+  return subjects.map((subject, i) => {
+    const release = shallow ? null : baseRelease + 1 + i;
+    return { release, summary: summaries.get(release) || subject };
+  });
+}
+
 /** Kill the in-flight git subprocess and any of its own children (e.g. git-remote-http). */
 export function killActiveCheck() {
   if (activeChild) { try { process.kill(-activeChild.pid, 'SIGTERM'); } catch { /* already exited */ } }
@@ -89,9 +137,15 @@ export async function checkForUpdate(cwd) {
     await git(cwd, ['fetch', '--quiet', upstream.split('/')[0]]);
     const counts = await git(cwd, ['rev-list', '--left-right', '--count', 'HEAD...@{u}']);
     const [ahead, behind] = counts.split(/\s+/).map(Number);
+    // The release list only decorates the "behind" notice: if resolving it fails, the
+    // notice still shows (with the bare count), so an error here is deliberately non-fatal.
+    let releases = [];
+    if (behind > 0) {
+      try { releases = await incomingReleases(cwd, upstream); } catch { releases = []; }
+    }
     return (status = {
       checked: true, checkedAt, supported: true, tracked: true,
-      branch, upstream, ahead, behind, updateAvailable: behind > 0,
+      branch, upstream, ahead, behind, updateAvailable: behind > 0, releases,
     });
   } catch (e) {
     return (status = { checked: true, checkedAt, supported: true, error: e.message });

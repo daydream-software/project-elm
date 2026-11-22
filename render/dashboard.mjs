@@ -72,8 +72,8 @@ function formatDuration(ms) {
 }
 
 /** Truncate a name to {@link MAX_NAME_LEN}, with an ellipsis if it was cut. */
-function truncate(name) {
-  return name.length > MAX_NAME_LEN ? name.slice(0, MAX_NAME_LEN - 1) + '…' : name;
+function truncate(name, max = MAX_NAME_LEN) {
+  return name.length > max ? name.slice(0, max - 1) + '…' : name;
 }
 
 /**
@@ -148,7 +148,28 @@ function updateLine() {
   if (g.error) return colorize(`unable to check (${g.error.split('\n')[0].slice(0, 100)})`, '2');
   if (!g.tracked) return colorize('no upstream branch configured', '2');
   if (!g.updateAvailable) return colorize('up to date', '2');
-  return colorize(`⚠ ${g.behind} commit${g.behind === 1 ? '' : 's'} behind ${g.upstream} — run \`git pull\``, '33');
+  return colorize(`⚠ ${g.behind} release${g.behind === 1 ? '' : 's'} behind ${g.upstream} — run \`git pull\``, '33');
+}
+
+const MAX_RELEASE_LINES = 5;    // incoming releases listed under the Update row
+const MAX_SUMMARY_LEN = 72;     // per-release summary cap, so no row wraps (see updateLine)
+
+/**
+ * The incoming releases under the Update row, newest first, as `+rN: summary`
+ * (summaries from the upstream CHANGELOG.md — see git-update.mjs). Capped in count and
+ * width: this panel is a fixed-line-count in-place redraw.
+ *
+ * @returns {string[]} Zero or more panel rows.
+ */
+function updateReleaseLines() {
+  const g = state.getGitStatus() || {};
+  const releases = g.updateAvailable && Array.isArray(g.releases) ? g.releases : [];
+  const indent = ' '.repeat(12);   // aligns under the value column ("Update      ")
+  const rows = releases.slice().reverse().slice(0, MAX_RELEASE_LINES)
+    .map(r => `${indent}${colorize(r.release ? `+r${r.release}:` : '+', '33')} ${truncate(String(r.summary), MAX_SUMMARY_LEN)}`);
+  const hidden = releases.length - rows.length;
+  if (hidden > 0) rows.push(colorize(`${indent}… +${hidden} older (see CHANGELOG.md)`, '2'));
+  return rows;
 }
 
 /* Active overlays = configs with at least one open SSE connection (see
@@ -246,6 +267,7 @@ function buildPanel() {
     `Clips       ${clips.count} downloaded · ${humanSize(clips.bytes)} on disk`,
     `Configs     ${configs.length} saved`,
     `Update      ${updateLine()}`,
+    ...updateReleaseLines(),
     '',
     ...overlayLines(),
     '',

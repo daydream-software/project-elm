@@ -191,15 +191,26 @@ are gitignored — all local user data.
 - The overlay's live reload uses a plain SSE connection back to `render/server.mjs` —
   so the overlay only ever needs to be reachable at `http://localhost:8080`, same as
   the selection UI.
+- **Editing a downloaded clip** (trim, re-encode, …): edit `render/realclips/<id>.mp4`
+  in any video editor and save it **under the same file name**. The server watches that
+  folder, and live overlays switch to the edited version at their next loop — no OBS
+  source refresh needed. A copy saved under another name (e.g. `<id> (edited).mp4`)
+  is ignored: the reel only ever plays `<id>.mp4`.
 - The dashboard's **Update** status (and the matching banner in the curate UI) is
   warn-only: a `git fetch` + compare against your tracked branch, run once at startup.
-  It never runs `git pull` for you — that's always your call.
+  When you're behind, it lists what a pull would bring in, one line per release with
+  its [`CHANGELOG.md`](CHANGELOG.md) summary (e.g. `+r21: …`). It never runs
+  `git pull` for you — that's always your call.
 
 ## Not yet
 
 - Live-overlay loudness pre-pass (the *rendered* path already evens loudness).
 - Intro/outro card, background music bed.
 - Vertical/portrait output, A/V-drift check on a long (15–20 clip) reel.
+
+## Changelog
+
+Every commit on `main` is a release — see [`CHANGELOG.md`](CHANGELOG.md).
 
 ## License
 

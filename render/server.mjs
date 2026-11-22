@@ -22,6 +22,7 @@ import * as catalog from './catalog.mjs';
 import * as metrics from './metrics.mjs';
 import * as dashboard from './dashboard.mjs';
 import * as gitUpdate from './git-update.mjs';
+import { watchClips } from './clip-watch.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');            // repo root (serves /overlay/, /render/…)
@@ -96,7 +97,9 @@ function resolvePlaylist(config) {
       showBroadcaster: config.showBroadcaster !== false,
       showGame: config.showGame !== false,
     },
-    clips: chosen.map(c => ({ mp4: `/render/realclips/${c.id}.mp4`, title: c.title, broadcaster: c.broadcaster, game: c.game, duration: c.duration })),
+    // Versioned URL (mtime + size): an MP4 edited on disk gets a new URL, which is the
+    // only thing that makes Chromium drop its in-memory copy of the old bytes.
+    clips: chosen.map(c => ({ mp4: tw.clipUrl(c.id), title: c.title, broadcaster: c.broadcaster, game: c.game, duration: c.duration })),
   };
 }
 
@@ -433,6 +436,19 @@ server.listen(PORT, '127.0.0.1', () => {   // localhost only — never expose to
   // Same shutdown fn as SIGINT/SIGTERM — the dashboard's `q` keybind (see dashboard.mjs's
   // setupKeybinds) just gives the TTY panel a third way to trigger it.
   dashboard.start({ port: PORT, subscribers, uiSubscribers, getLogin: () => LOGIN, getGitStatus: gitUpdate.getStatus, onQuit: shutdown });
+  // A clip MP4 edited/replaced/removed on disk outside the app (e.g. trimmed in a video
+  // editor): tell every live overlay using it to re-fetch its playlist — the clip's
+  // versioned URL (tw.clipUrl) then changes, forcing a fresh load at the next loop.
+  watchClips(ids => {
+    try {   // runs from a timer: an uncaught throw here (e.g. a corrupt config file) would kill the server
+      const affected = (ids ? cfg.configsReferencing(ids) : [...subscribers.keys()]).filter(id => subscribers.has(id));
+      if (!affected.length) return;
+      dashboard.log(`Clip file changed on disk${ids ? ` (${ids.join(', ')})` : ''} → refreshing ${affected.length} live overlay(s)`);
+      affected.forEach(notify);
+    } catch (e) {
+      dashboard.log(`ERROR clip watcher: ${e.stack || e.message}`);
+    }
+  });
   // Fire-and-forget: warn-only update check (git fetch + compare, never pull/merge — see
   // git-update.mjs). Runs once at startup, same principle as this project's "no automatic
   // Twitch calls" — checked here, not polled, and never applied without the user's say-so.

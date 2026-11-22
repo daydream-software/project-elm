@@ -60,6 +60,29 @@ export const clipFile = (clip) => path.join(CLIPS_DIR, `${clip.id}.mp4`);
 export const isDownloadedId = (id) => fs.existsSync(path.join(CLIPS_DIR, `${id}.mp4`));
 /** Same as {@link isDownloadedId}, taking a Helix clip object instead of a bare id. */
 export const isDownloaded = (clip) => isDownloadedId(clip.id);
+
+/**
+ * URL a browser should load a downloaded clip's MP4 from, versioned by the file's
+ * mtime + size (`?v=...`; the static server ignores the query string). Chromium keeps
+ * media bytes in an in-memory cache keyed by URL that ignores `Cache-Control: no-store`
+ * and even survives a page reload, so an unversioned URL keeps playing the ORIGINAL
+ * bytes after the file is edited or replaced on disk. An edited file gets a new URL
+ * and so a fresh fetch; an untouched file keeps a stable URL, so a looping overlay
+ * still reuses its cached copy instead of piling up one cache entry per loop.
+ *
+ * @param {string} id - Clip id.
+ * @returns {string} `/render/realclips/<id>.mp4?v=<version>`, or unversioned if the
+ *   file can't be stat'ed (e.g. deleted in the meantime).
+ */
+export function clipUrl(id) {
+  const base = `/render/realclips/${encodeURIComponent(id)}.mp4`;
+  try {
+    const st = fs.statSync(path.join(CLIPS_DIR, `${id}.mp4`));
+    return `${base}?v=${Math.trunc(st.mtimeMs).toString(36)}-${st.size.toString(36)}`;
+  } catch {
+    return base;
+  }
+}
 /** Ids of every clip currently downloaded to `CLIPS_DIR` (derived from the `.mp4` filenames on disk). */
 export const listDownloadedIds = () => fs.existsSync(CLIPS_DIR)
   ? fs.readdirSync(CLIPS_DIR).filter(f => f.endsWith('.mp4')).map(f => f.slice(0, -4))

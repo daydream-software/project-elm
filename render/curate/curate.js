@@ -77,6 +77,24 @@ function showApp() {
 }
 
 /* ---- Update-available notice (warn-only, see server.mjs/git-update.mjs) ---- */
+const MAX_BANNER_RELEASES = 8;
+/**
+ * The incoming releases as an HTML list, newest first, `+rN: summary` (summaries from
+ * the upstream CHANGELOG.md — see git-update.mjs). Escaped: the text comes from the remote.
+ *
+ * @param {{release: ?number, summary: string}[]} [releases] - Oldest first, as the server
+ *   sends them (`release` is null when the server's clone is shallow and can't number them).
+ * @returns {string} A `<ul>`, or `''` when there's nothing to list.
+ */
+function releaseListHtml(releases) {
+  if (!Array.isArray(releases) || !releases.length) return '';
+  const items = releases.slice().reverse().slice(0, MAX_BANNER_RELEASES)
+    .map(r => `<li><code>${r.release ? `+r${Number(r.release)}:` : '+'}</code> ${esc(r.summary)}</li>`);
+  const hidden = releases.length - items.length;
+  if (hidden > 0) items.push(`<li class="more">… +${hidden} older — see <code>CHANGELOG.md</code></li>`);
+  return `<ul class="update-releases">${items.join('')}</ul>`;
+}
+
 /**
  * Show the update-available banner, or a subdued note if the check itself failed
  * (offline, git missing, …) — silence otherwise. Only called once the check has
@@ -87,8 +105,9 @@ function updateGitBanner(git) {
   const el = $('updateBanner');
   if (git.updateAvailable) {
     const n = git.behind;
-    $('updateBannerText').innerHTML = `⟳ Update available — ${n} commit${n === 1 ? '' : 's'} behind ` +
-      `<code>${esc(git.upstream || 'upstream')}</code>. Run <code>git pull</code> in the project folder, then restart the server.`;
+    $('updateBannerText').innerHTML = `⟳ Update available — ${n} release${n === 1 ? '' : 's'} behind ` +
+      `<code>${esc(git.upstream || 'upstream')}</code>. Run <code>git pull</code> in the project folder, then restart the server.` +
+      releaseListHtml(git.releases);
     el.classList.remove('subtle');
     el.hidden = false;
   } else if (git.error) {
@@ -564,6 +583,19 @@ async function deleteDownload(id) {
 
 /* ---- Clip preview (popup overlay, same window) ---- */
 /**
+ * Cache-busted URL for one-shot local playback of a downloaded clip (preview popup,
+ * thumbnail grab). Chromium's in-memory media cache ignores `Cache-Control: no-store`
+ * and outlives page reloads, so a stable URL would keep showing the ORIGINAL bytes
+ * after the MP4 is edited on disk; a fresh query string forces a re-read.
+ *
+ * @param {string} id - Clip id.
+ * @returns {string}
+ */
+function freshClipSrc(id) {
+  return `/render/realclips/${encodeURIComponent(id)}.mp4?t=${Date.now()}`;
+}
+
+/**
  * Open the preview popup for a clip: plays the local mp4 if downloaded, else falls
  * back to the official Twitch embed.
  *
@@ -573,7 +605,7 @@ function openPreview(c) {
   const body = $('previewBody');
   $('previewTitle').textContent = c.title || '(untitled)';
   if (c.downloaded) {
-    body.innerHTML = `<video src="/render/realclips/${encodeURIComponent(c.id)}.mp4" controls autoplay playsinline></video>`;
+    body.innerHTML = `<video src="${freshClipSrc(c.id)}" controls autoplay playsinline></video>`;
   } else {
     // Not downloaded yet: fall back to the official Twitch clip embed (needs a user
     // gesture to autoplay with sound, which this click just provided).
@@ -610,7 +642,7 @@ async function ensureHomemadeThumbnail(id) {
   thumbRegenAttempted.add(id);
   try {
     const video = document.createElement('video');
-    video.src = `/render/realclips/${encodeURIComponent(id)}.mp4`;
+    video.src = freshClipSrc(id);
     video.muted = true;
     video.playsInline = true;
     await new Promise((resolve, reject) => {

@@ -33,7 +33,9 @@
 
 /**
  * @typedef {object} Clip
- * @property {string} mp4 - URL of the downloaded clip file.
+ * @property {string} mp4 - URL of the downloaded clip file, versioned by the server
+ *   (`?v=<mtime>-<size>`) so an MP4 edited on disk is re-fetched instead of replayed
+ *   from Chromium's in-memory media cache.
  * @property {string} [title]
  * @property {string} [game]
  * @property {string} [broadcaster]
